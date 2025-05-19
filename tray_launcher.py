@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QSystemTrayIcon, QStyle
 )
-from PyQt5.QtGui import QIcon, QCursor
+from PyQt5.QtGui import QCursor
 from PyQt5.QtCore import Qt, QPoint
 from screeninfo import get_monitors
 
@@ -24,26 +24,20 @@ class PopupWindow(QWidget):
         self.btn2.clicked.connect(lambda: print("Skript 2 gestartet"))
         self.layout.addWidget(self.btn2)
 
-        self.resize_dynamic()
-
     def resize_dynamic(self):
-        # Bildschirmgröße holen
-        screen = get_monitors()[0]  # primärer Bildschirm
+        screen = get_monitors()[0]
         screen_width = screen.width
         screen_height = screen.height
 
-        # Fenstergröße relativ zur Bildschirmgröße
-        width = int(screen_width * 0.15)   # 15 % der Breite
-        height = int(screen_height * 0.3)  # 30 % der Höhe
-
+        # Dynamische Größe: z. B. 15 % Breite, 30 % Höhe
+        width = int(screen_width * 0.15)
+        height = int(screen_height * 0.3)
         self.setFixedSize(width, height)
 
-        # Fenster an rechter unterer Ecke positionieren
-        margin_right = 10
-        margin_bottom = 40  # etwas Platz für Tray
-        x = screen_width - width - margin_right
-        y = screen_height - height - margin_bottom
-
+    def position_at_cursor_bottom_right(self):
+        cursor_pos = QCursor.pos()  # globale Cursorposition
+        x = cursor_pos.x() - self.width()
+        y = cursor_pos.y() - self.height()
         self.move(QPoint(x, y))
 
 
@@ -59,7 +53,6 @@ class TrayApp(QApplication):
         self.tray.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))  # Platzhalter-Icon
         self.tray.setVisible(True)
 
-        # Signal verbinden
         self.tray.activated.connect(self.on_tray_activated)
 
     def on_tray_activated(self, reason):
@@ -68,6 +61,7 @@ class TrayApp(QApplication):
 
     def show_popup(self):
         self.popup.resize_dynamic()
+        self.popup.position_at_cursor_bottom_right()
         self.popup.show()
         self.popup.activateWindow()
 
