@@ -32,15 +32,17 @@ class PopupWindow(QWidget):
         screen_width = screen.width
         screen_height = screen.height
 
-        # Größe relativ zum Bildschirm setzen
-        width = 200  # fest (schmal)
-        height = int(screen_height * 0.3)  # z. B. 30 % der Höhe
+        # Fenstergröße relativ zur Bildschirmgröße
+        width = int(screen_width * 0.15)   # 15 % der Breite
+        height = int(screen_height * 0.3)  # 30 % der Höhe
 
         self.setFixedSize(width, height)
 
-        # Positionieren: rechts unten
-        x = screen_width - width - 10  # 10px vom rechten Rand
-        y = screen_height - height - 40  # 40px vom unteren Rand (Tray-Höhe unter Windows berücksichtigen)
+        # Fenster an rechter unterer Ecke positionieren
+        margin_right = 10
+        margin_bottom = 40  # etwas Platz für Tray
+        x = screen_width - width - margin_right
+        y = screen_height - height - margin_bottom
 
         self.move(QPoint(x, y))
 
