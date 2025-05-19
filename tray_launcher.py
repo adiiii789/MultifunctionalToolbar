@@ -1,67 +1,60 @@
 import sys
-import threading
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton
-from pystray import Icon, MenuItem, Menu
-from PIL import Image, ImageDraw
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QPushButton,
+    QSystemTrayIcon, QStyle
+)
+from PyQt5.QtGui import QIcon, QCursor
+from PyQt5.QtCore import Qt, QPoint
+from screeninfo import get_monitors
 
-# Beispiel-Funktionen, die durch die Buttons aufgerufen werden
-def script1():
-    print("Skript 1 wird ausgeführt...")
-
-def script2():
-    print("Skript 2 wird ausgeführt...")
-
-# GUI-Fenster
-class ScriptWindow(QWidget):
+class PopupWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Skript Starter")
-        self.setGeometry(100, 100, 200, 150)
+        self.setFixedSize(200, 120)
+        self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
 
         layout = QVBoxLayout()
-        btn1 = QPushButton("Starte Skript 1")
-        btn1.clicked.connect(script1)
+        btn1 = QPushButton("Skript 1")
+        btn1.clicked.connect(lambda: print("Skript 1 gestartet"))
         layout.addWidget(btn1)
 
-        btn2 = QPushButton("Starte Skript 2")
-        btn2.clicked.connect(script2)
+        btn2 = QPushButton("Skript 2")
+        btn2.clicked.connect(lambda: print("Skript 2 gestartet"))
         layout.addWidget(btn2)
 
         self.setLayout(layout)
 
-# Taskleiste-Icon-Logik
-class TrayApp:
-    def __init__(self):
-        self.icon = Icon("Skriptstarter")
-        self.app = QApplication(sys.argv)
-        self.window = ScriptWindow()
+class TrayApp(QApplication):
+    def __init__(self, sys_argv):
+        super().__init__(sys_argv)
+        self.setQuitOnLastWindowClosed(False)
 
-        # Erstelle ein Icon-Bild
-        self.icon.icon = self.create_image()
-        self.icon.menu = Menu(
-            MenuItem("Fenster öffnen", self.show_window),
-            MenuItem("Beenden", self.exit_app)
-        )
+        self.popup = PopupWindow()
 
-    def create_image(self):
-        # Einfaches Icon generieren
-        image = Image.new("RGB", (64, 64), "gray")
-        draw = ImageDraw.Draw(image)
-        draw.rectangle((16, 16, 48, 48), fill="black")
-        return image
+        # Tray Icon
+        self.tray = QSystemTrayIcon()
+        self.tray.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon)) # FÜr später, Icon ersetzen
+        self.tray.setVisible(True)
 
-    def show_window(self, icon, item):
-        self.window.show()
+        # Signal verbinden
+        self.tray.activated.connect(self.on_tray_activated)
 
-    def exit_app(self, icon, item):
-        self.icon.stop()
-        self.app.quit()
+    def on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.Context:  # Rechtsklick
+            self.show_popup()
 
-    def run(self):
-        # Starte das Tray-Icon in einem eigenen Thread
-        threading.Thread(target=self.icon.run, daemon=True).start()
-        sys.exit(self.app.exec_())
+    from PyQt5.QtGui import QCursor
+
+    def show_popup(self):
+        cursor_pos = QCursor.pos()
+        x = cursor_pos.x() - self.popup.width() + 20
+        y = cursor_pos.y() - self.popup.height() - 10
+        self.popup.move(QPoint(x, y))
+        self.popup.show()
+        self.popup.activateWindow()
+
 
 if __name__ == "__main__":
-    tray_app = TrayApp()
-    tray_app.run()
+    app = TrayApp(sys.argv)
+    sys.exit(app.exec_())
