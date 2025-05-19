@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QSystemTrayIcon, QStyle, QMainWindow, QSizePolicy
 )
-from PyQt5.QtGui import QCursor
+from PyQt5.QtGui import QCursor, QIcon
 from PyQt5.QtCore import Qt, QPoint
 from screeninfo import get_monitors
 
@@ -34,7 +34,7 @@ class PopupWindow(QWidget, ButtonContentMixin):
         screen_height = screen.height
 
         width = int(screen_width * 0.15)
-        height = int(screen_height * 0.3)
+        height = int(screen_height * 0.5)
         self.setFixedSize(width, height)
 
     def position_at_cursor_bottom_right(self):
@@ -67,7 +67,7 @@ class TrayApp(QApplication):
         self.main_window = MainAppWindow()
 
         self.tray = QSystemTrayIcon()
-        self.tray.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+        self.tray.setIcon(QIcon("TrayIcon.ico"))
         self.tray.setVisible(True)
 
         self.tray.activated.connect(self.on_tray_activated)
