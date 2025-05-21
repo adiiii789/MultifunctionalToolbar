@@ -80,7 +80,13 @@ class PopupWindow(QWidget, ButtonContentMixin):
         self.layout = QVBoxLayout(self)
         self.add_buttons(self.layout)
 
-        self.setFixedSize(200, 150)
+        screen = get_monitors()[0]
+        screen_width = screen.width
+        screen_height = screen.height
+
+        width = int(screen_width * 0.15)
+        height = int(screen_height * 0.5)
+        self.setFixedSize(width, height)
 
     def position_at_cursor_bottom_right(self):
         cursor_pos = QCursor.pos()
