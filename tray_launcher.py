@@ -1,10 +1,10 @@
 import sys
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
-    QSystemTrayIcon, QMainWindow, QSizePolicy
+    QSystemTrayIcon, QMainWindow, QSizePolicy, QScrollArea
 )
 from PyQt5.QtGui import QCursor, QIcon
-from PyQt5.QtCore import Qt, QPoint
+from PyQt5.QtCore import Qt, QPoint, QPropertyAnimation, QRect
 from screeninfo import get_monitors
 
 # Dark Mode Stylesheet
@@ -55,6 +55,8 @@ class ButtonContentMixin:
         for label, handler in [
             ("Button 1", self.handle_script1),
             ("Button 2", self.handle_script2),
+            ("Button 3", self.handle_script3),
+            ("Button 4", self.handle_script4),
         ]:
             button = QPushButton(label)
             button.setMinimumHeight(60)
@@ -70,6 +72,14 @@ class ButtonContentMixin:
     def handle_script2(self):
         print("Skript 2 gestartet")
 
+    def handle_script3(self):
+        print("Skript 3 gestartet")
+
+    def handle_script4(self):
+        print("Skript 4 gestartet")
+
+
+from PyQt5.QtCore import QPropertyAnimation, QRect, QEasingCurve
 
 class PopupWindow(QWidget, ButtonContentMixin):
     def __init__(self):
@@ -81,24 +91,35 @@ class PopupWindow(QWidget, ButtonContentMixin):
         self.add_buttons(self.layout)
 
         screen = get_monitors()[0]
-        screen_width = screen.width
-        screen_height = screen.height
+        self.width_size = int(screen.width * 0.15)  # Dynamische Größe: 15 % Breite
+        self.height_size = int(screen.height * 0.5)  # Dynamische Größe: 50 % Höhe
+        self.setFixedSize(self.width_size, self.height_size)
 
-        width = int(screen_width * 0.15)
-        height = int(screen_height * 0.5)
-        self.setFixedSize(width, height)
+        self.animation = QPropertyAnimation(self, b"geometry")
+        self.animation.setDuration(500)  # Dauer der Animation
+        self.animation.setEasingCurve(QEasingCurve.OutCubic)  # Sanfte Bewegung
 
-    def position_at_cursor_bottom_right(self):
+    def show_popup(self):
         cursor_pos = QCursor.pos()
-        x = cursor_pos.x() - self.width()
-        y = cursor_pos.y() - self.height()
-        self.move(QPoint(x, y))
+        start_x = cursor_pos.x()
+        start_y = cursor_pos.y()
+
+        end_x = start_x - self.width_size
+        end_y = start_y - self.height_size
+
+        # Startet die Animation von unterhalb der Maus
+        self.animation.setStartValue(QRect(start_x, start_y + 50, self.width_size, self.height_size))
+        self.animation.setEndValue(QRect(end_x, end_y, self.width_size, self.height_size))
+
+        self.animation.start()  # Animation starten
+        self.show()
+        self.activateWindow()
 
 
 class MainAppWindow(QMainWindow, ButtonContentMixin):
     def __init__(self, app):
         super().__init__()
-        self.app = app  # Referenz auf die QApplication
+        self.app = app
         self.setWindowTitle("Skript Starter – Hauptfenster")
         self.resize(800, 600)
 
@@ -134,11 +155,10 @@ class TrayApp(QApplication):
     def __init__(self, sys_argv):
         super().__init__(sys_argv)
         self.setQuitOnLastWindowClosed(False)
-
-        self.setStyleSheet(dark_mode_stylesheet)  # Startet mit Dark Mode
+        self.setStyleSheet(dark_mode_stylesheet)
 
         self.popup = PopupWindow()
-        self.main_window = MainAppWindow(self)  # Hauptfenster bekommt App-Referenz
+        self.main_window = MainAppWindow(self)
 
         self.tray = QSystemTrayIcon()
         self.tray.setIcon(QIcon("TrayIcon.ico"))
@@ -148,19 +168,9 @@ class TrayApp(QApplication):
 
     def on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.Context:
-            self.show_popup()
+            self.popup.show_popup()  # Hier wird die Animation gestartet!
         elif reason == QSystemTrayIcon.Trigger:
-            self.show_main_window()
-
-    def show_popup(self):
-        self.popup.position_at_cursor_bottom_right()
-        self.popup.show()
-        self.popup.activateWindow()
-
-    def show_main_window(self):
-        self.main_window.show()
-        self.main_window.activateWindow()
-        self.main_window.raise_()
+            self.main_window.show()
 
 
 if __name__ == "__main__":
