@@ -5,8 +5,8 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QSystemTrayIcon, QMainWindow, QSizePolicy, QHBoxLayout, QLabel
 )
-from PyQt5.QtGui import QCursor, QIcon, QMouseEvent
-from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve, QPoint
+from PyQt5.QtGui import QCursor, QIcon
+from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve, QPoint, QFileSystemWatcher
 from screeninfo import get_monitors
 
 # Dark Mode Stylesheet
@@ -34,6 +34,15 @@ class ButtonContentMixin:
         if not os.path.exists(self.current_path):
             os.makedirs(self.current_path)
 
+        # QFileSystemWatcher für Änderungen im aktuellen Verzeichnis
+        self.watcher = QFileSystemWatcher()
+        self.watcher.addPath(self.current_path)
+        self.watcher.directoryChanged.connect(self.on_directory_changed)
+
+    def on_directory_changed(self, path):
+        # Aktuelle Buttons aktualisieren, wenn sich etwas im Ordner ändert
+        self.add_buttons(self.layout)
+
     def add_buttons(self, layout):
         for i in reversed(range(layout.count())):
             widget = layout.itemAt(i).widget()
@@ -44,6 +53,13 @@ class ButtonContentMixin:
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setAlignment(Qt.AlignTop)
 
+        # watcher an neuen Pfad anpassen
+        if hasattr(self, "watcher"):
+            paths = self.watcher.directories()
+            if paths and paths[0] != self.current_path:
+                self.watcher.removePaths(paths)
+                self.watcher.addPath(self.current_path)
+
         if self.current_path != os.path.abspath(self.SCRIPT_FOLDER):
             back_button = QPushButton("← Zurück")
             back_button.clicked.connect(self.go_back)
@@ -52,6 +68,10 @@ class ButtonContentMixin:
 
         entries = sorted(os.listdir(self.current_path))
         for entry in entries:
+            if entry.startswith("_"):
+                # Dateien/Ordner, die mit _ anfangen, ignorieren
+                continue
+
             full_path = os.path.join(self.current_path, entry)
 
             if os.path.isdir(full_path):
@@ -128,6 +148,7 @@ class ButtonContentMixin:
                             }}
                         """)
 
+
 class CustomTitleBar(QWidget):
     def __init__(self, parent, title=""):
         super().__init__(parent)
@@ -202,9 +223,11 @@ class CustomTitleBar(QWidget):
         self.old_pos = None
 
 
-class PopupWindow(QWidget, ButtonContentMixin):
+class PopupWindow(ButtonContentMixin, QWidget):
     def __init__(self):
         super().__init__()
+        self.dark_mode = True  # Muss vor add_buttons gesetzt sein
+
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
 
         self.layout = QVBoxLayout(self)
@@ -219,8 +242,6 @@ class PopupWindow(QWidget, ButtonContentMixin):
         self.animation = QPropertyAnimation(self, b"geometry")
         self.animation.setDuration(500)
         self.animation.setEasingCurve(QEasingCurve.OutCubic)
-
-        self.dark_mode = True
 
     def show_popup(self):
         self.add_buttons(self.layout)
@@ -249,7 +270,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.app = app
         self.popup = popup
 
-        self.dark_mode = True
+        self.dark_mode = False
 
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setMinimumSize(800, 600)
