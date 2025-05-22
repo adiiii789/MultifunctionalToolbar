@@ -50,7 +50,7 @@ class ButtonContentMixin:
 
         # Zurück-Button nur anzeigen, wenn nicht im Stammordner
         if self.current_path != os.path.abspath(self.SCRIPT_FOLDER):
-            back_button = QPushButton("⬅️ Zurück")
+            back_button = QPushButton("⬅ Zurück")
             back_button.clicked.connect(self.go_back)
             back_button.setObjectName("back_button")
             layout.addWidget(back_button)
@@ -186,41 +186,195 @@ class PopupWindow(QWidget, ButtonContentMixin):
         self.hide()
 
 
+
 class MainAppWindow(QMainWindow, ButtonContentMixin):
     def __init__(self, app, popup=None):
         super().__init__()
         self.app = app
-        self.popup = popup  # Referenz zum Popup
+        self.popup = popup
+
+        self.dark_mode = True  # VORHER definieren, damit update_button_styles es nutzen kann
+
         self.setWindowTitle("Skript Starter – Hauptfenster")
         self.resize(800, 600)
 
+        self.current_path = os.path.abspath(self.SCRIPT_FOLDER)
+
         central_widget = QWidget()
-        self.layout = QVBoxLayout(central_widget)
-        self.layout.setSpacing(0)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setAlignment(Qt.AlignTop)
+        self.main_layout = QVBoxLayout(central_widget)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+        self.main_layout.setAlignment(Qt.AlignTop)
 
-        self.init_button_state()
-        self.add_buttons(self.layout)
+        self.buttons_container = QWidget()
+        self.buttons_layout = QVBoxLayout(self.buttons_container)
+        self.buttons_layout.setContentsMargins(0, 0, 0, 0)
+        self.buttons_layout.setSpacing(0)
+        self.buttons_layout.setAlignment(Qt.AlignTop)
 
+        self.refresh_buttons()  # Jetzt funktioniert es
+
+        # Theme-Wechsel Button (immer sichtbar, außerhalb des Buttons-Containers)
         self.toggle_button = QPushButton("Wechsle Theme")
         self.toggle_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.toggle_button.clicked.connect(self.toggle_theme)
-        self.layout.addWidget(self.toggle_button)
 
-        central_widget.setLayout(self.layout)
+        # Buttons-Container und Toggle Button ins Hauptlayout packen
+        self.main_layout.addWidget(self.buttons_container)
+        self.main_layout.addWidget(self.toggle_button)
+
         self.setCentralWidget(central_widget)
 
-        self.dark_mode = True  # Start mit Dark Mode
+        self.dark_mode = True  # Start im Dark Mode
+
+    def refresh_buttons(self):
+        # Alte Buttons entfernen
+        while self.buttons_layout.count():
+            item = self.buttons_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        # Buttons basierend auf current_path hinzufügen
+        self.add_buttons(self.buttons_layout, path=self.current_path)
+        self.update_button_styles(self.buttons_layout)
+
+    def add_buttons(self, layout, path=None):
+        # Falls kein Pfad übergeben, aktuellen Pfad verwenden
+        if path is None:
+            path = self.current_path
+
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignTop)
+
+        # Wenn nicht im Root-Ordner, Zeige Zurück-Button
+        root_path = os.path.abspath(self.SCRIPT_FOLDER)
+        if os.path.abspath(path) != root_path:
+            back_button = QPushButton("← Zurück")
+            back_button.setMinimumHeight(60)
+            back_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            back_button.setStyleSheet("QPushButton { margin: 0px; padding: 0px; }")
+            back_button.clicked.connect(self.go_back)
+            layout.addWidget(back_button)
+
+        # Ordner und .py Dateien listen
+        try:
+            entries = sorted(os.listdir(path), key=lambda s: s.lower())
+        except FileNotFoundError:
+            entries = []
+
+        for entry in entries:
+            full_path = os.path.join(path, entry)
+            button = QPushButton(entry)
+            button.setMinimumHeight(60)
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            button.setStyleSheet("QPushButton { margin: 0px; padding: 0px; }")
+
+            if os.path.isdir(full_path):
+                # Ordner: Klick öffnet Ordner
+                button.clicked.connect(lambda _, p=full_path: self.open_folder(p))
+                button.setProperty("type", "folder")
+            elif os.path.isfile(full_path) and entry.endswith(".py"):
+                # Python Datei: Klick startet Skript
+                button.clicked.connect(lambda _, p=full_path: self.run_script(p))
+                button.setProperty("type", "file")
+            else:
+                # Andere Dateien ignorieren (keine Buttons)
+                continue
+
+            layout.addWidget(button)
+
+    def open_folder(self, path):
+        self.current_path = path
+        self.refresh_buttons()
+
+    def go_back(self):
+        root_path = os.path.abspath(self.SCRIPT_FOLDER)
+        parent_path = os.path.abspath(os.path.join(self.current_path, ".."))
+        if os.path.commonpath([root_path]) == os.path.commonpath([root_path, parent_path]):
+            self.current_path = parent_path
+            self.refresh_buttons()
 
     def toggle_theme(self):
         self.dark_mode = not self.dark_mode
         self.app.setStyleSheet(dark_mode_stylesheet if self.dark_mode else light_mode_stylesheet)
-        self.update_button_styles(self.layout)
-        # Popup auch updaten, falls vorhanden
+        self.update_button_styles(self.buttons_layout)
         if self.popup:
             self.popup.dark_mode = self.dark_mode
             self.popup.update_button_styles(self.popup.layout)
+
+    def update_button_styles(self, layout):
+        for i in range(layout.count()):
+            widget = layout.itemAt(i).widget()
+            if isinstance(widget, QPushButton):
+                btn_type = widget.property("type")
+                if btn_type == "folder":
+                    # Subtile Ordner-Hintergrundfarbe
+                    widget.setStyleSheet("""
+                        QPushButton {
+                            background-color: #4A4A6A;
+                            color: #FFFFFF;
+                            margin: 0px; padding: 0px;
+                        }
+                        QPushButton:hover {
+                            background-color: #5A5A7A;
+                        }
+                    """ if self.dark_mode else """
+                        QPushButton {
+                            background-color: #DDDDFF;
+                            color: #000000;
+                            margin: 0px; padding: 0px;
+                        }
+                        QPushButton:hover {
+                            background-color: #CCCCEE;
+                        }
+                    """)
+                elif btn_type == "file":
+                    # Subtile Datei-Hintergrundfarbe
+                    widget.setStyleSheet("""
+                        QPushButton {
+                            background-color: #3A3A3A;
+                            color: #FFFFFF;
+                            margin: 0px; padding: 0px;
+                        }
+                        QPushButton:hover {
+                            background-color: #505050;
+                        }
+                    """ if self.dark_mode else """
+                        QPushButton {
+                            background-color: #EEEEEE;
+                            color: #000000;
+                            margin: 0px; padding: 0px;
+                        }
+                        QPushButton:hover {
+                            background-color: #DDDDDD;
+                        }
+                    """)
+                elif widget.text() == "← Zurück":
+                    # Zurück-Button etwas anders stylen
+                    widget.setStyleSheet("""
+                        QPushButton {
+                            background-color: #666666;
+                            color: #FFFFFF;
+                            margin: 0px; padding: 0px;
+                            font-weight: bold;
+                        }
+                        QPushButton:hover {
+                            background-color: #777777;
+                        }
+                    """ if self.dark_mode else """
+                        QPushButton {
+                            background-color: #BBBBBB;
+                            color: #000000;
+                            margin: 0px; padding: 0px;
+                            font-weight: bold;
+                        }
+                        QPushButton:hover {
+                            background-color: #CCCCCC;
+                        }
+                    """)
+
 
 
 class TrayApp(QApplication):
