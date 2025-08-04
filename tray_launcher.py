@@ -9,6 +9,8 @@ from PyQt5.QtGui import QCursor, QIcon
 from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve, QPoint, QFileSystemWatcher
 from screeninfo import get_monitors
 
+import ctypes
+
 # Dark Mode Stylesheet
 dark_mode_stylesheet = """
     QWidget {
@@ -130,11 +132,11 @@ class ButtonContentMixin:
                     if entry_type == "folder":
                         button.setStyleSheet(f"""
                             QPushButton {{
-                                background-color: {'#3A4A6A' if dark_mode else '#DDDDFF'};
+                                background-color: {'#3A4A6A' if dark_mode else '#c2d1ff'};
                                 color: {'#FFFFFF' if dark_mode else '#000000'};
                             }}
                             QPushButton:hover {{
-                                background-color: {'#4B5B6B' if dark_mode else '#CCCCEE'};
+                                background-color: {'#4B5B6B' if dark_mode else '#a1b8ff'};
                             }}
                         """)
                     elif entry_type == "file":
@@ -144,7 +146,7 @@ class ButtonContentMixin:
                                 color: {'#FFFFFF' if dark_mode else '#000000'};
                             }}
                             QPushButton:hover {{
-                                background-color: {'#505050' if dark_mode else '#DDDDDD'};
+                                background-color: {'#505050' if dark_mode else '#CCCCCC'};
                             }}
                         """)
 
@@ -267,6 +269,7 @@ class PopupWindow(ButtonContentMixin, QWidget):
 class MainAppWindow(QMainWindow, ButtonContentMixin):
     def __init__(self, app, popup=None):
         super().__init__()
+        self.setWindowIcon(QIcon("ProgrammIcon.ico"))
         self.app = app
         self.popup = popup
 
@@ -344,5 +347,8 @@ class TrayApp(QApplication):
 
 
 if __name__ == "__main__":
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(u"meinefirma.skriptstarter.1.0")
+
     app = TrayApp(sys.argv)
     sys.exit(app.exec_())
+
