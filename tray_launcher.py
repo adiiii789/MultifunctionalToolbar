@@ -396,15 +396,41 @@ class PopupWindow(ButtonContentMixin, QWidget):
     def __init__(self):
         super().__init__()
         self.dark_mode = True  # Muss vor add_buttons gesetzt sein
-
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
 
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(8, 8, 8, 8)
-        self.layout.setSpacing(4)
+        # Hauptlayout
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(8, 8, 8, 8)
+        self.main_layout.setSpacing(4)
+
+        # Toolbar mit Explorer-Button (komplett eigenes Widget)
+        self.toolbar_widget = QWidget()
+        self.toolbar = QHBoxLayout(self.toolbar_widget)
+        self.toolbar.setContentsMargins(0, 0, 0, 0)
+        self.toolbar.setSpacing(0)
+
+        self.back_to_explorer_btn = QPushButton("← Explorer")
+        self.back_to_explorer_btn.clicked.connect(self.show_explorer)
+        self.toolbar.addWidget(self.back_to_explorer_btn)
+        self.toolbar.addStretch()
+
+        self.toolbar_widget.setVisible(False)  # Toolbar komplett unsichtbar
+        self.main_layout.addWidget(self.toolbar_widget)
+
+        # Seitenverwaltung wie im Hauptfenster
+        self.pages = QStackedWidget()
+        self.main_layout.addWidget(self.pages)
+
+        # Explorer-Seite
+        self.explorer_container = QWidget()
+        self.layout = QVBoxLayout(self.explorer_container)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
 
         self.init_button_state()
         self.add_buttons(self.layout)
+
+        self.pages.addWidget(self.explorer_container)  # Index 0 = Explorer
 
         screen = get_monitors()[0]
         self.width_size = int(screen.width * 0.15)
@@ -417,27 +443,17 @@ class PopupWindow(ButtonContentMixin, QWidget):
 
     def show_explorer(self):
         """Zeige wieder die Liste der Skript-Buttons"""
-        # Alle bisherigen Inhalte entfernen
-        for i in reversed(range(self.layout.count())):
-            w = self.layout.itemAt(i).widget()
-            if w:
-                w.setParent(None)
-
-        # Buttons erneut hinzufügen
-        self.add_buttons(self.layout)
-        self.update_button_styles(self.layout)
-        self.back_to_explorer_btn.hide()
+        self.pages.setCurrentWidget(self.explorer_container)
+        self.toolbar_widget.setVisible(False)  # Toolbar komplett weg
 
     def show_popup(self):
         self.add_buttons(self.layout)
         self.update_button_styles(self.layout)
-
         cursor_pos = QCursor.pos()
         start_x = cursor_pos.x()
         start_y = cursor_pos.y()
         end_x = start_x - self.width_size
         end_y = start_y - self.height_size
-
         self.animation.setStartValue(QRect(start_x, start_y + 50, self.width_size, self.height_size))
         self.animation.setEndValue(QRect(end_x, end_y, self.width_size, self.height_size))
         self.animation.start()
@@ -449,13 +465,7 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.hide()
 
     def show_plugin_widget(self, widget: QWidget, title: str = ""):
-        """Zeigt ein Plugin direkt im Popup an (wie im Hauptfenster)"""
-        # Alle bisherigen Inhalte entfernen
-        for i in reversed(range(self.layout.count())):
-            w = self.layout.itemAt(i).widget()
-            if w:
-                w.setParent(None)
-
+        """Zeigt ein Plugin direkt im Popup an (persistente Instanz)"""
         container = QWidget()
         v = QVBoxLayout(container)
         v.setContentsMargins(8, 8, 8, 8)
@@ -465,11 +475,14 @@ class PopupWindow(ButtonContentMixin, QWidget):
         v.addWidget(header)
         v.addWidget(widget)
 
-        self.layout.addWidget(container)
+        self.pages.addWidget(container)
+        self.pages.setCurrentWidget(container)
 
-        # Popup-Größe anpassen
-        container.adjustSize()
-        self.adjustSize()
+        self.toolbar_widget.setVisible(True)  # Toolbar einblenden
+
+
+
+
 
 
 
