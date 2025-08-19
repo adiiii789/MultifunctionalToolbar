@@ -242,7 +242,8 @@ class ButtonContentMixin:
                     import webbrowser
                     webbrowser.open('file://' + os.path.abspath(path))
         except Exception as e:
-            print(f"Fehler beim Starten/Laden von {path}: {e}")
+            #print(f"Fehler beim Starten/Laden von {path}: {e}")
+            pass
 
     def update_button_styles(self, layout):
         dark_mode = getattr(self, "dark_mode", True)
@@ -551,8 +552,11 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         """Plugin im Hauptfenster oder Popup laden"""
         try:
             if path.lower().endswith('.py'):
-                widget = self.load_python_plugin_widget(path)
+                mode = "popup" if isinstance(source_widget, PopupWindow) else "window"
+                widget = self.load_python_plugin_widget(path, mode=mode)
                 if widget is None:
+                    QMessageBox.warning(source_widget or self, "Kein Plugin",
+                                        f"{os.path.basename(path)} enthält keine Klasse 'PluginWidget'.")
                     return
             elif path.lower().endswith('.html'):
                 widget = HtmlPluginContainer(path)
@@ -579,7 +583,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         except Exception as e:
             QMessageBox.critical(source_widget or self, "Fehler beim Laden", f"{e}")
 
-    def load_python_plugin_widget(self, path: str):
+    def load_python_plugin_widget(self, path: str, mode="window"):
         module_name = os.path.splitext(os.path.basename(path))[0]
         spec = importlib.util.spec_from_file_location(module_name, path)
         if spec is None or spec.loader is None:
@@ -587,7 +591,11 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         if hasattr(module, 'PluginWidget'):
-            widget = module.PluginWidget()
+            # Übergibt theme + mode an Plugin
+            widget = module.PluginWidget(
+                theme="dark" if self.dark_mode else "light",
+                mode=mode
+            )
             return widget
         return None
 
