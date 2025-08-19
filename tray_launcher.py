@@ -195,17 +195,18 @@ class ButtonContentMixin:
         entries = sorted(os.listdir(self.current_path))
         for entry in entries:
             if entry.startswith("_"):
-                # Dateien/Ordner, die mit _ anfangen, ignorieren
-                continue
+                continue  # Alles mit "_" ignorieren
 
             full_path = os.path.join(self.current_path, entry)
 
             if os.path.isdir(full_path):
-                button = QPushButton(f"[Ordner] {entry}")
+                button = QPushButton(entry)
                 button.clicked.connect(lambda _, p=full_path: self.enter_directory(p))
                 button.setProperty("entry_type", "folder")
             elif entry.endswith(".py") or entry.endswith(".html"):
-                button = QPushButton(entry)
+                # Dateiname ohne .py anzeigen
+                display_name = entry[:-3] if entry.endswith(".py") else entry
+                button = QPushButton(display_name)
                 button.clicked.connect(lambda _, p=full_path: self.run_script(p))
                 button.setProperty("entry_type", "file")
             else:
@@ -552,8 +553,6 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             if path.lower().endswith('.py'):
                 widget = self.load_python_plugin_widget(path)
                 if widget is None:
-                    QMessageBox.warning(source_widget or self, "Kein Plugin",
-                                        f"{os.path.basename(path)} enthält keine Klasse 'PluginWidget'.")
                     return
             elif path.lower().endswith('.html'):
                 widget = HtmlPluginContainer(path)
