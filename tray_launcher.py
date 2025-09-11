@@ -482,10 +482,6 @@ class PopupWindow(ButtonContentMixin, QWidget):
 
 
 
-
-
-
-
 # ------------------------------
 # MainAppWindow mit QStackedWidget
 # ------------------------------
