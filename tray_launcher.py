@@ -13,9 +13,11 @@ from PyQt5.QtGui import QCursor, QIcon, QColor, QGuiApplication
 from PyQt5.QtCore import (
     Qt, QRect, QPoint, QFileSystemWatcher, QObject, pyqtSlot, QUrl, QPropertyAnimation, QEasingCurve
 )
+
 try:
     from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings
     from PyQt5.QtWebChannel import QWebChannel
+
     WEBENGINE_AVAILABLE = True
 except Exception:
     WEBENGINE_AVAILABLE = False
@@ -30,14 +32,21 @@ QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
 
 # --- Globale Theme-Variable ---
 theme = "dark"
+
+
 def is_dark():
     global theme
     return theme == "dark"
+
 
 dark_mode_stylesheet = """
     QWidget {
         background-color: #2E2E2E;
         color: #FFFFFF;
+        transition: background-color 0.5s ease, color 0.5s ease;
+    }
+    QPushButton {
+        transition: background-color 0.5s ease, color 0.5s ease;
     }
 """
 
@@ -45,17 +54,23 @@ light_mode_stylesheet = """
     QWidget {
         background-color: #FFFFFF;
         color: #000000;
+        transition: background-color 0.5s ease, color 0.5s ease;
+    }
+    QPushButton {
+        transition: background-color 0.5s ease, color 0.5s ease;
     }
 """
 
 def current_stylesheet():
     return dark_mode_stylesheet if is_dark() else light_mode_stylesheet
 
+
 def set_theme(new_theme, app=None):
     global theme
     theme = new_theme
     if app is not None:
         app.setStyleSheet(current_stylesheet())
+
 # -----------------------------
 
 def ensure_sample_plugin(script_root: str):
@@ -139,6 +154,7 @@ class PluginWidget(QWidget):
             f.write(html_code)
     except Exception:
         print("Fehler beim Anlegen der Beispiel-Plugins und HTML:", traceback.format_exc())
+
 
 class ButtonContentMixin:
     SCRIPT_FOLDER = "scripts"
@@ -284,6 +300,7 @@ class ButtonContentMixin:
                             }}
                         """)
 
+
 class HtmlPluginContainer(QWidget):
     def __init__(self, html_path: str):
         super().__init__()
@@ -302,19 +319,24 @@ class HtmlPluginContainer(QWidget):
                 layout.addWidget(msg)
                 open_btn = QPushButton("Im Standardbrowser öffnen")
                 layout.addWidget(open_btn)
+
                 def _open():
                     import webbrowser
                     webbrowser.open('file://' + os.path.abspath(html_path))
+
                 open_btn.clicked.connect(_open)
         else:
             msg = QLabel("PyQtWebEngine ist nicht installiert. Öffne die Datei extern.")
             layout.addWidget(msg)
             open_btn = QPushButton("Im Standardbrowser öffnen")
             layout.addWidget(open_btn)
+
             def _open2():
                 import webbrowser
                 webbrowser.open('file://' + os.path.abspath(html_path))
+
             open_btn.clicked.connect(_open2)
+
 
 class PopupWindow(ButtonContentMixin, QWidget):
     def __init__(self, app=None):
@@ -327,8 +349,8 @@ class PopupWindow(ButtonContentMixin, QWidget):
 
         self.html_toolbar = QWebEngineView(self) if WEBENGINE_AVAILABLE else QWidget(self)
         if WEBENGINE_AVAILABLE:
-            self.html_toolbar.setFixedHeight(32)
-            self.html_toolbar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            self.html_toolbar.setFixedHeight(40)
+            self.html_toolbar.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
             self.html_toolbar.page().setWebChannel(self.channel)
             self.html_toolbar.loadFinished.connect(self._on_toolbar_load_finished)
             self.html_toolbar.setVisible(False)
@@ -520,6 +542,7 @@ class PopupWindow(ButtonContentMixin, QWidget):
         event.ignore()
         self.hide()
 
+
 class ThemeBridge(QObject):
     def __init__(self, main_window=None, popup=None):
         super().__init__()
@@ -537,6 +560,7 @@ class ThemeBridge(QObject):
             self.popup.show_explorer()
         elif self.main_window:
             self.main_window.go_back_to_explorer()
+
 
 class MainAppWindow(QMainWindow, ButtonContentMixin):
     def __init__(self, app, popup=None):
@@ -627,64 +651,211 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         if not screen:
             screen = QGuiApplication.primaryScreen()
         geometry = screen.geometry()
-        self.width_size = int(geometry.width() * 0.5)
-        self.height_size = int(geometry.height() * 0.7)
+        self.width_size = int(geometry.width() * 0.4)
+        self.height_size = int(geometry.height() * 0.4)
 
     def _build_html_toolbar(self):
         mode = theme
-        explorer_btn = f'<button id="explorerBtn" class="toolbar-btn {mode}" style="margin-left:7px;">← Explorer</button>' if self.show_explorer_btn else ''
+        # Explorer-Button nur wenn show_explorer_btn True ist
+        explorer_btn = f'<button id="explorerBtn" class="toolbar-btn {mode}" style="margin-left:20px; display:{"inline-block" if self.show_explorer_btn else "none"};">← Explorer</button>'
+
         html_code = f"""
         <!DOCTYPE html>
         <html lang="de">
         <head>
-            <meta charset="UTF-8">
+            <meta charset="UTF-8" />
             <title>Toolbar</title>
             <style>
                 html, body {{
-                    overflow: hidden !important;
+                    height: 100%;
                     margin: 0;
-                    background: transparent;
+                    padding: 0;
                 }}
+
                 .toolbar-btn {{
-                    padding: 8px 16px;
-                    border: 1px solid #ccc;
+                    padding: 4px 10px;
+                    border: 1px solid transparent;
                     border-radius: 6px;
                     font-size: 14px;
                     font-weight: 500;
                     cursor: pointer;
                     transition: background 0.3s, color 0.3s, border-color 0.3s;
-                    margin-right: 8px;
+                    min-height: 35px;
+                    min-width: 80px;
+                    background: transparent !important;
+                    outline: none;
                 }}
                 .light {{ background: #ffffff; color: #333; border-color: #dddddd; }}
                 .dark  {{ background: #2c2c2c; color: #f5f5f5; border-color: #444; }}
-                .toolbar-container {{ display: flex; align-items: center; height: 40px; }}
+
+                .toolbar-container {{
+                    display: flex;
+                    align-items: center; 
+                    height: 2.5rem;          
+                    padding: 0 1rem;  
+                    gap: 8px;
+                    background: transparent !important;
+                }}
+
+                /* --- Toggle Switch bleibt unverändert --- */
+                .switch {{
+                  position: relative;
+                  width: 5rem;
+                  height: 2.5rem;
+                  cursor: pointer;
+                  user-select: none;
+                  margin-top: 0.4rem;
+                }}
+
+                .switch input {{
+                  position: absolute;
+                  top: 0;
+                  left: 0;
+                  width: 100%;
+                  height: 100%;
+                  margin: 0;
+                  opacity: 0;
+                  cursor: pointer;
+                  z-index: 3;
+                }}
+
+                .background {{
+                  position: absolute;
+                  width: 5rem;
+                  height: 2rem;
+                  border-radius: 1.25rem;
+                  border: 0.15rem solid #202020;
+                  background: linear-gradient(to right, #484848 0%, #202020 100%);
+                  transition: all 0.3s;
+                  top: 0;
+                  left: 0;
+                  z-index: 1;
+                }}
+
+                .fill {{
+                  position: fixed;
+                  top: 0;
+                  right: 0;
+                  bottom: 2rem;
+                  left: 0;
+                  background: #484848;
+                  transition: 0.75s all ease;
+                }}
+
+                .switch input:checked ~ .fill {{
+                  background: #E9F8FD;
+                }}
+
+                .stars1,
+                .stars2 {{
+                  position: absolute;
+                  height: 0.2rem;
+                  width: 0.2rem;
+                  background: #FFFFFF;
+                  border-radius: 50%;
+                  transition: 0.3s all ease;
+                }}
+                .stars1 {{ top: 3px; right: 13px; }}
+                .stars2 {{ top: 20px; right: 28px; }}
+
+                .stars1:after,
+                .stars1:before,
+                .stars2:after,
+                .stars2:before {{
+                  position: absolute;
+                  content: "";
+                  display: block;
+                  height: 0.125rem;
+                  width: 0.125rem;
+                  background: #FFFFFF;
+                  border-radius: 50%;
+                  transition: 0.2s all ease;
+                }}
+
+                .sun-moon {{
+                  position: absolute;
+                  left: 0;
+                  top: 0;
+                  height: 1.5rem;
+                  width: 1.5rem;
+                  margin: 0.25rem;
+                  background: #FFFDF2;
+                  border-radius: 50%;
+                  border: 0.15rem solid #DEE2C6;
+                  transition: all 0.5s ease;
+                  z-index: 2;
+                }}
+
+                .sun-moon .dots {{
+                  position: absolute;
+                  top: 1.5px;
+                  left: 11.5px;
+                  height: 0.5rem;
+                  width: 0.5rem;
+                  background: #EFEEDB;
+                  border: 0.15rem solid #DEE2C6;
+                  border-radius: 50%;
+                  transition: 0.4s all ease;
+                }}
+
+                .switch input:checked ~ .sun-moon {{
+                  left: calc(100% - 2rem);
+                  background: #F5EC59;
+                  border-color: #E7C65C;
+                  transform: rotate(-25deg);
+                }}
+
+                .switch input:checked ~ .sun-moon .dots,
+                .switch input:checked ~ .sun-moon .dots:after,
+                .switch input:checked ~ .sun-moon .dots:before {{
+                  background: #FFFFFF;
+                  border-color: #FFFFFF;
+                }}
+
+                .switch input:checked ~ .background {{
+                  border: 0.15rem solid #78C1D5;
+                  background: linear-gradient(to right, #78C1D5 0%, #BBE7F5 100%);
+                }}
             </style>
         </head>
         <body>
             <div class="toolbar-container">
-                <button id="themeBtn" class="toolbar-btn {mode}">Wechsle Theme</button>
+                <div class="switch">
+                    <label for="toggle">
+                        <input id="toggle" class="toggle-switch" type="checkbox" {'checked' if mode == "light" else ''} />
+                        <div class="sun-moon"><div class="dots"></div></div>
+                        <div class="background"><div class="stars1"></div><div class="stars2"></div></div>
+                    </label>
+                </div>
                 {explorer_btn}
             </div>
             <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
             <script>
-            new QWebChannel(qt.webChannelTransport, function(channel) {{
-                window.bridge = channel.objects.bridge;
-            }});
-            document.getElementById("themeBtn").className = "toolbar-btn " + "{mode}";
-            document.getElementById("themeBtn").onclick = function() {{
-                bridge.toggleTheme();
-                popup.toggleTheme();
-            }};
-            function setBtnMode(mode){{
-              document.getElementById("themeBtn").className = "toolbar-btn " + mode;
-              var eb = document.getElementById("explorerBtn");
-              if(eb) eb.className = "toolbar-btn " + mode;
-            }}
-            var eb = document.getElementById("explorerBtn");
-            if(eb) eb.onclick = function(){{
-               bridge.goBackToExplorer();
-            }};
-            window.setBtnMode = setBtnMode;
+                new QWebChannel(qt.webChannelTransport, function(channel) {{
+                    window.bridge = channel.objects.bridge;
+                    const toggle = document.getElementById("toggle");
+                    const explorerBtn = document.getElementById("explorerBtn");
+
+                    toggle.addEventListener("change", function() {{
+                        bridge.toggleTheme();
+                        // Explorer-Button in Echtzeit anpassen
+                        if (explorerBtn) {{
+                            if (toggle.checked) {{
+                                explorerBtn.classList.remove('dark');
+                                explorerBtn.classList.add('light');
+                            }} else {{
+                                explorerBtn.classList.remove('light');
+                                explorerBtn.classList.add('dark');
+                            }}
+                        }}
+                    }});
+
+                    if (explorerBtn) {{
+                        explorerBtn.onclick = function() {{
+                            bridge.goBackToExplorer();
+                        }};
+                    }}
+                }});
             </script>
         </body>
         </html>
@@ -693,6 +864,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             if WEBENGINE_AVAILABLE:
                 self.html_toolbar.setHtml(html_code)
         except Exception:
+            import traceback
             print("Fehler beim Setzen der Toolbar HTML:", traceback.format_exc())
 
     def toggle_theme(self):
@@ -702,12 +874,26 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.update_button_styles(self.layout)
         if self.popup:
             self.popup.update_button_styles(self.popup.layout)
-        self._build_html_toolbar()
+
+        # Den Explorer-Button im WebEngine nach Themewechsel neu updaten
+        if WEBENGINE_AVAILABLE:
+            js = f'window.setBtnMode && window.setBtnMode("{theme}");'
+            try:
+                self.html_toolbar.page().runJavaScript(js)
+            except Exception:
+                pass
 
     def go_back_to_explorer(self):
         self.pages.setCurrentWidget(self.scroll_area)
         self.show_explorer_btn = False
         self._build_html_toolbar()
+        # Explorer-Button beim Zurücksetzen auch updaten
+        if WEBENGINE_AVAILABLE:
+            js = f'window.setBtnMode && window.setBtnMode("{theme}");'
+            try:
+                self.html_toolbar.page().runJavaScript(js)
+            except Exception:
+                pass
 
     def load_plugin_from_path(self, path: str, source_widget=None):
         try:
@@ -715,7 +901,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                 widget = self.load_python_plugin_widget(path)
                 if widget is None:
                     QMessageBox.warning(source_widget or self, "Kein Plugin",
-                        f"{os.path.basename(path)} enthält keine Klasse 'PluginWidget'.")
+                                        f"{os.path.basename(path)} enthält keine Klasse 'PluginWidget'.")
                     return
             elif path.lower().endswith('.html'):
                 widget = HtmlPluginContainer(path)
@@ -736,6 +922,13 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                 self.pages.setCurrentWidget(container)
                 self.show_explorer_btn = True
                 self._build_html_toolbar()
+                # Explorer-Button beim Anzeigen des Plugins updaten
+                if WEBENGINE_AVAILABLE:
+                    js = f'window.setBtnMode && window.setBtnMode("{theme}");'
+                    try:
+                        self.html_toolbar.page().runJavaScript(js)
+                    except Exception:
+                        pass
         except Exception as e:
             QMessageBox.critical(source_widget or self, "Fehler beim Laden", f"{e}")
 
@@ -750,6 +943,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             return None
         except Exception:
             return None
+
 
 class TrayApp(QApplication):
     def __init__(self, sys_argv):
@@ -775,6 +969,7 @@ class TrayApp(QApplication):
             else:
                 self.main_window.activateWindow()
                 self.main_window.raise_()
+
 
 if __name__ == "__main__":
     try:
