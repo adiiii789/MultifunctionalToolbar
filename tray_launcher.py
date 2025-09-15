@@ -2,29 +2,32 @@ import sys
 import os
 import subprocess
 import importlib.util
+import traceback
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QSystemTrayIcon, QMainWindow, QSizePolicy, QHBoxLayout, QLabel,
-    QStackedWidget, QMessageBox
+    QStackedWidget, QMessageBox, QScrollArea
 )
-from PyQt5.QtGui import QCursor, QIcon
-from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve, QPoint, QFileSystemWatcher
-from screeninfo import get_monitors
-
-import ctypes
-
-# Optional: HTML-Ansicht (falls PyQtWebEngine installiert ist)
+from PyQt5.QtGui import QCursor, QIcon, QColor
+from PyQt5.QtCore import (
+    Qt, QRect, QPoint, QFileSystemWatcher, QObject, pyqtSlot, QUrl, QPropertyAnimation, QEasingCurve
+)
 try:
-    from PyQt5.QtWebEngineWidgets import QWebEngineView
+    from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings
+    from PyQt5.QtWebChannel import QWebChannel
     WEBENGINE_AVAILABLE = True
 except Exception:
-    QWebEngineView = None
     WEBENGINE_AVAILABLE = False
 
-# ------------------------------
-# Stylesheets
-# ------------------------------
-# Dark Mode Stylesheet
+from screeninfo import get_monitors
+import ctypes
+
+# --- Globale Theme-Variable ---
+theme = "dark"
+def is_dark():
+    global theme
+    return theme == "dark"
+
 dark_mode_stylesheet = """
     QWidget {
         background-color: #2E2E2E;
@@ -32,7 +35,6 @@ dark_mode_stylesheet = """
     }
 """
 
-# Light Mode Stylesheet
 light_mode_stylesheet = """
     QWidget {
         background-color: #FFFFFF;
@@ -40,42 +42,37 @@ light_mode_stylesheet = """
     }
 """
 
+def current_stylesheet():
+    return dark_mode_stylesheet if is_dark() else light_mode_stylesheet
 
-# ------------------------------
-# Hilfsfunktionen
-# ------------------------------
+def set_theme(new_theme, app=None):
+    global theme
+    theme = new_theme
+    if app is not None:
+        app.setStyleSheet(current_stylesheet())
+# -----------------------------
 
 def ensure_sample_plugin(script_root: str):
-    """Erzeugt ein Beispiel-Plugin, wenn der Ordner leer ist."""
     if not os.path.exists(script_root):
         os.makedirs(script_root, exist_ok=True)
-
     entries = [e for e in os.listdir(script_root) if not e.startswith("_")]
     if entries:
-        return  # Schon Inhalte vorhanden
-
-    # Beispiel-Plugin schreiben
+        return
     sample_path = os.path.join(script_root, "timer_plugin.py")
     sample_code = r'''from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout
 from PyQt5.QtCore import QTimer
 
 class PluginWidget(QWidget):
-    """Ein simples Timer-Plugin als Beispiel.
-    Start/Stop-Knöpfe und Sekundenanzeige.
-    """
     def __init__(self):
         super().__init__()
         self.setObjectName("TimerPlugin")
         layout = QVBoxLayout(self)
-
         title = QLabel("⏱️ Timer-Plugin")
         title.setStyleSheet("font-weight: bold; font-size: 16px;")
         layout.addWidget(title)
-
         self.label = QLabel("0 s")
         self.label.setStyleSheet("font-size: 24px;")
         layout.addWidget(self.label)
-
         btn_row = QHBoxLayout()
         start_btn = QPushButton("Start")
         stop_btn = QPushButton("Stop")
@@ -84,32 +81,27 @@ class PluginWidget(QWidget):
         btn_row.addWidget(stop_btn)
         btn_row.addWidget(reset_btn)
         layout.addLayout(btn_row)
-
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.update_time)
         self.seconds = 0
-
         start_btn.clicked.connect(self.timer.start)
         stop_btn.clicked.connect(self.timer.stop)
         reset_btn.clicked.connect(self.reset)
-
     def update_time(self):
         self.seconds += 1
         self.label.setText(f"{self.seconds} s")
-
     def reset(self):
         self.seconds = 0
         self.label.setText("0 s")
 '''
-    with open(sample_path, "w", encoding="utf-8") as f:
-        f.write(sample_code)
-
-    # Beispiel-HTML-Plugin anlegen (falls WebEngine verfügbar)
-    html_dir = os.path.join(script_root, "html_timer")
-    os.makedirs(html_dir, exist_ok=True)
-    html_index = os.path.join(html_dir, "index.html")
-    html_code = r'''<!DOCTYPE html>
+    try:
+        with open(sample_path, "w", encoding="utf-8") as f:
+            f.write(sample_code)
+        html_dir = os.path.join(script_root, "html_timer")
+        os.makedirs(html_dir, exist_ok=True)
+        html_index = os.path.join(html_dir, "index.html")
+        html_code = r'''<!DOCTYPE html>
 <html lang="de">
 <head>
 <meta charset="UTF-8" />
@@ -137,85 +129,84 @@ class PluginWidget(QWidget):
   </script>
 </body>
 </html>'''
-    with open(html_index, "w", encoding="utf-8") as f:
-        f.write(html_code)
+        with open(html_index, "w", encoding="utf-8") as f:
+            f.write(html_code)
+    except Exception:
+        print("Fehler beim Anlegen der Beispiel-Plugins und HTML:", traceback.format_exc())
 
-
-# ------------------------------
-# ButtonContentMixin
-# ------------------------------
 class ButtonContentMixin:
     SCRIPT_FOLDER = "scripts"
 
     def init_button_state(self):
         self.current_path = os.path.abspath(self.SCRIPT_FOLDER)
         ensure_sample_plugin(self.current_path)
-
         if not os.path.exists(self.current_path):
             os.makedirs(self.current_path)
-
-        # QFileSystemWatcher für Änderungen im aktuellen Verzeichnis
         self.watcher = QFileSystemWatcher()
-        self.watcher.addPath(self.current_path)
-        self.watcher.directoryChanged.connect(self.on_directory_changed)
-
-        # Optional: ein Loader-Callback (vom MainWindow gesetzt)
+        try:
+            if os.path.exists(self.current_path):
+                self.watcher.addPath(self.current_path)
+        except Exception:
+            print("Fehler beim Hinzufügen des Watchers:", traceback.format_exc())
+        try:
+            self.watcher.directoryChanged.connect(self.on_directory_changed)
+        except Exception:
+            print("Fehler beim Verbinden des Watchersignals:", traceback.format_exc())
         self.plugin_loader = None
 
     def set_plugin_loader(self, loader_callable):
         self.plugin_loader = loader_callable
 
     def on_directory_changed(self, path):
-        # Aktuelle Buttons aktualisieren, wenn sich etwas im Ordner ändert
         self.add_buttons(self.layout)
 
     def add_buttons(self, layout):
         for i in reversed(range(layout.count())):
-            widget = layout.itemAt(i).widget()
+            item = layout.itemAt(i)
+            widget = item.widget() if item else None
             if widget:
                 widget.setParent(None)
-
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setAlignment(Qt.AlignTop)
-
-        # watcher an neuen Pfad anpassen
         if hasattr(self, "watcher"):
-            paths = self.watcher.directories()
-            if paths and paths[0] != self.current_path:
-                self.watcher.removePaths(paths)
-                self.watcher.addPath(self.current_path)
-
+            try:
+                paths = self.watcher.directories()
+                if paths and paths != self.current_path:
+                    self.watcher.removePaths(paths)
+                    self.watcher.addPath(self.current_path)
+            except Exception:
+                print("Fehler beim Aktualisieren des Watchers:", traceback.format_exc())
         if self.current_path != os.path.abspath(self.SCRIPT_FOLDER):
             back_button = QPushButton("← Zurück")
             back_button.clicked.connect(self.go_back)
             back_button.setObjectName("back_button")
             layout.addWidget(back_button)
-
-        entries = sorted(os.listdir(self.current_path))
+        try:
+            entries = sorted(os.listdir(self.current_path))
+        except Exception:
+            entries = []
         for entry in entries:
             if entry.startswith("_"):
-                continue  # Alles mit "_" ignorieren
-
-            full_path = os.path.join(self.current_path, entry)
-
-            if os.path.isdir(full_path):
-                button = QPushButton(entry)
-                button.clicked.connect(lambda _, p=full_path: self.enter_directory(p))
-                button.setProperty("entry_type", "folder")
-            elif entry.endswith(".py") or entry.endswith(".html"):
-                # Dateiname ohne .py anzeigen
-                display_name = entry[:-3] if entry.endswith(".py") else entry
-                button = QPushButton(display_name)
-                button.clicked.connect(lambda _, p=full_path: self.run_script(p))
-                button.setProperty("entry_type", "file")
-            else:
                 continue
-
-            button.setMinimumHeight(60)
-            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            layout.addWidget(button)
-
+            full_path = os.path.join(self.current_path, entry)
+            try:
+                if os.path.isdir(full_path):
+                    button = QPushButton(entry)
+                    button.clicked.connect(lambda _, p=full_path: self.enter_directory(p))
+                    button.setProperty("entry_type", "folder")
+                elif entry.endswith(".py") or entry.endswith(".html"):
+                    display_name = entry[:-3] if entry.endswith(".py") else entry
+                    button = QPushButton(display_name)
+                    button.clicked.connect(lambda _, p=full_path: self.run_script(p))
+                    button.setProperty("entry_type", "file")
+                else:
+                    continue
+                button.setMinimumHeight(60)
+                button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                layout.addWidget(button)
+            except Exception:
+                print("Fehler beim Erstellen eines Buttons:", traceback.format_exc())
         self.update_button_styles(layout)
 
     def enter_directory(self, path):
@@ -225,28 +216,30 @@ class ButtonContentMixin:
     def go_back(self):
         parent = os.path.dirname(self.current_path)
         root = os.path.abspath(self.SCRIPT_FOLDER)
-        if os.path.commonpath([parent, root]) == root:
-            self.current_path = parent
-            self.add_buttons(self.layout)
+        try:
+            if os.path.commonpath([parent, root]) == root:
+                self.current_path = parent
+                self.add_buttons(self.layout)
+                return
+        except Exception:
+            print("Fehler beim Zurückgehen im Verzeichnis:", traceback.format_exc())
+        self.current_path = root
+        self.add_buttons(self.layout)
 
     def run_script(self, path):
         try:
             if callable(getattr(self, "plugin_loader", None)):
                 self.plugin_loader(path, source_widget=self)
-                # Explorer-Button sichtbar machen
-                self.back_to_explorer_btn.show()
             else:
                 if path.endswith('.py'):
                     subprocess.Popen([sys.executable, path])
                 elif path.endswith('.html'):
                     import webbrowser
                     webbrowser.open('file://' + os.path.abspath(path))
-        except Exception as e:
-            #print(f"Fehler beim Starten/Laden von {path}: {e}")
-            pass
+        except Exception:
+            print("Fehler beim Ausführen des Skripts:", traceback.format_exc())
 
     def update_button_styles(self, layout):
-        dark_mode = getattr(self, "dark_mode", True)
         for i in range(layout.count()):
             button = layout.itemAt(i).widget()
             if isinstance(button, QPushButton):
@@ -254,12 +247,12 @@ class ButtonContentMixin:
                     button.setMinimumHeight(40)
                     button.setStyleSheet(f"""
                         QPushButton {{
-                            background-color: {'#666666' if dark_mode else '#BBBBBB'};
-                            color: {'#FFFFFF' if dark_mode else '#000000'};
+                            background-color: {'#666666' if is_dark() else '#BBBBBB'};
+                            color: {'#FFFFFF' if is_dark() else '#000000'};
                             font-weight: bold;
                         }}
                         QPushButton:hover {{
-                            background-color: {'#777777' if dark_mode else '#CCCCCC'};
+                            background-color: {'#777777' if is_dark() else '#CCCCCC'};
                         }}
                     """)
                 else:
@@ -267,170 +260,113 @@ class ButtonContentMixin:
                     if entry_type == "folder":
                         button.setStyleSheet(f"""
                             QPushButton {{
-                                background-color: {'#3A4A6A' if dark_mode else '#c2d1ff'};
-                                color: {'#FFFFFF' if dark_mode else '#000000'};
+                                background-color: {'#3A4A6A' if is_dark() else '#c2d1ff'};
+                                color: {'#FFFFFF' if is_dark() else '#000000'};
                             }}
                             QPushButton:hover {{
-                                background-color: {'#4B5B6B' if dark_mode else '#a1b8ff'};
+                                background-color: {'#4B5B6B' if is_dark() else '#a1b8ff'};
                             }}
                         """)
                     elif entry_type == "file":
                         button.setStyleSheet(f"""
                             QPushButton {{
-                                background-color: {'#3A3A3A' if dark_mode else '#EEEEEE'};
-                                color: {'#FFFFFF' if dark_mode else '#000000'};
+                                background-color: {'#3A3A3A' if is_dark() else '#EEEEEE'};
+                                color: {'#FFFFFF' if is_dark() else '#000000'};
                             }}
                             QPushButton:hover {{
-                                background-color: {'#505050' if dark_mode else '#CCCCCC'};
+                                background-color: {'#505050' if is_dark() else '#CCCCCC'};
                             }}
                         """)
 
-# ------------------------------
-# Custom Title Bar
-# ------------------------------
-class CustomTitleBar(QWidget):
-    def __init__(self, parent, title=""):
-        super().__init__(parent)
-        self.parent = parent
-        self.setFixedHeight(30)
-        self.setStyleSheet("background-color: transparent")
-
-        self.layout = QHBoxLayout(self)
-        self.layout.setContentsMargins(5, 0, 5, 0)
-
-        self.title_label = QLabel(title)
-        self.title_label.setStyleSheet("font-weight: bold")
-
-        self.minimize_button = QPushButton("▁")
-        self.minimize_button.setFixedSize(30, 28)
-        self.minimize_button.setStyleSheet(self.button_style())
-        self.minimize_button.clicked.connect(self.parent.showMinimized)
-
-        self.maximize_button = QPushButton("▢")
-        self.maximize_button.setFixedSize(30, 28)
-        self.maximize_button.setStyleSheet(self.button_style())
-        self.maximize_button.clicked.connect(self.toggle_maximize_restore)
-
-        self.close_button = QPushButton("✕")
-        self.close_button.setFixedSize(30, 28)
-        self.close_button.setStyleSheet(self.button_style(close=True))
-        self.close_button.clicked.connect(parent.close)
-
-        self.layout.addWidget(self.title_label)
-        self.layout.addStretch()
-        self.layout.addWidget(self.minimize_button)
-        self.layout.addWidget(self.maximize_button)
-        self.layout.addWidget(self.close_button)
-
-        self.old_pos = None
-
-    def button_style(self, close=False):
-        base = """
-            QPushButton {
-                border: none;
-                background-color: transparent;
-            }
-            QPushButton:hover {
-                background-color: %s;
-            }
-        """
-        if close:
-            hover_color = "#E81123"  # Rotes Hover für Close
-        else:
-            hover_color = "#CCCCCC"  # Graues Hover für andere Buttons
-        return base % hover_color
-
-    def toggle_maximize_restore(self):
-        if self.parent.isMaximized():
-            self.parent.showNormal()
-            self.maximize_button.setText("▢")
-        else:
-            self.parent.showMaximized()
-            self.maximize_button.setText("❐")
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.old_pos = event.globalPos()
-
-    def mouseMoveEvent(self, event):
-        if self.old_pos is not None:
-            delta = QPoint(event.globalPos() - self.old_pos)
-            self.parent.move(self.parent.pos() + delta)
-            self.old_pos = event.globalPos()
-
-    def mouseReleaseEvent(self, event):
-        self.old_pos = None
-
-
-# ------------------------------
-# Plugin-Container Widgets
-# ------------------------------
 class HtmlPluginContainer(QWidget):
-    """Zeigt eine lokale HTML-Datei im eingebetteten View, wenn verfügbar."""
     def __init__(self, html_path: str):
         super().__init__()
         layout = QVBoxLayout(self)
         title = QLabel(f"HTML: {os.path.basename(html_path)}")
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(title)
-
         if WEBENGINE_AVAILABLE:
-            view = QWebEngineView(self)
-            view.load(Qt.QUrl.fromLocalFile(os.path.abspath(html_path)))
-            layout.addWidget(view)
+            try:
+                view = QWebEngineView(self)
+                view.load(QUrl.fromLocalFile(os.path.abspath(html_path)))
+                view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
+                layout.addWidget(view)
+            except Exception:
+                msg = QLabel("PyQtWebEngine ist nicht installiert oder Laden fehlgeschlagen. Öffne die Datei extern.")
+                layout.addWidget(msg)
+                open_btn = QPushButton("Im Standardbrowser öffnen")
+                layout.addWidget(open_btn)
+                def _open():
+                    import webbrowser
+                    webbrowser.open('file://' + os.path.abspath(html_path))
+                open_btn.clicked.connect(_open)
         else:
             msg = QLabel("PyQtWebEngine ist nicht installiert. Öffne die Datei extern.")
             layout.addWidget(msg)
             open_btn = QPushButton("Im Standardbrowser öffnen")
             layout.addWidget(open_btn)
-            def _open():
+            def _open2():
                 import webbrowser
                 webbrowser.open('file://' + os.path.abspath(html_path))
-            open_btn.clicked.connect(_open)
+            open_btn.clicked.connect(_open2)
 
-
-# ------------------------------
-# PopupWindow
-# ------------------------------
 class PopupWindow(ButtonContentMixin, QWidget):
-    def __init__(self):
+    def __init__(self, app=None):
         super().__init__()
-        self.dark_mode = True  # Muss vor add_buttons gesetzt sein
+        self.app = app
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+        self.channel = QWebChannel()
+        self.bridge = ThemeBridge(main_window=None, popup=self)
+        self.channel.registerObject("bridge", self.bridge)
 
-        # Hauptlayout
-        self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(8, 8, 8, 8)
-        self.main_layout.setSpacing(4)
+        self.html_toolbar = QWebEngineView(self)
+        self.html_toolbar.setFixedHeight(32)
+        self.html_toolbar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.html_toolbar.page().setWebChannel(self.channel)
+        self.html_toolbar.loadFinished.connect(self._on_toolbar_load_finished)
+        self.html_toolbar.setVisible(False)
 
-        # Toolbar mit Explorer-Button (komplett eigenes Widget)
-        self.toolbar_widget = QWidget()
-        self.toolbar = QHBoxLayout(self.toolbar_widget)
-        self.toolbar.setContentsMargins(0, 0, 0, 0)
-        self.toolbar.setSpacing(0)
+        self._build_html_toolbar()
 
-        self.back_to_explorer_btn = QPushButton("← Explorer")
-        self.back_to_explorer_btn.clicked.connect(self.show_explorer)
-        self.toolbar.addWidget(self.back_to_explorer_btn)
-        self.toolbar.addStretch()
-
-        self.toolbar_widget.setVisible(False)  # Toolbar komplett unsichtbar
-        self.main_layout.addWidget(self.toolbar_widget)
-
-        # Seitenverwaltung wie im Hauptfenster
-        self.pages = QStackedWidget()
-        self.main_layout.addWidget(self.pages)
-
-        # Explorer-Seite
         self.explorer_container = QWidget()
         self.layout = QVBoxLayout(self.explorer_container)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
 
         self.init_button_state()
-        self.add_buttons(self.layout)
 
-        self.pages.addWidget(self.explorer_container)  # Index 0 = Explorer
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QScrollArea.NoFrame)
+        self.scroll_area.setStyleSheet("""
+            QScrollArea { background: transparent; }
+            QScrollBar:vertical {
+                background: #292929;
+                width: 10px;
+                margin: 0;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical {
+                background: #666;
+                min-height: 20px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                background: none;
+                height: 0;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
+        self.scroll_area.setWidget(self.explorer_container)
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self.scroll_area)
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(8, 8, 8, 8)
+        self.main_layout.setSpacing(4)
+        self.main_layout.addWidget(self.html_toolbar)
+        self.main_layout.addWidget(self.pages)
 
         screen = get_monitors()[0]
         self.width_size = int(screen.width * 0.15)
@@ -441,14 +377,126 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.animation.setDuration(500)
         self.animation.setEasingCurve(QEasingCurve.OutCubic)
 
+    def _build_html_toolbar(self):
+        mode = theme
+        explorer_btn = f'<button id="explorerBtn" class="toolbar-btn {mode}">← Explorer</button>'
+        html_code = f"""
+        <!DOCTYPE html>
+        <html lang="de">
+        <head>
+            <meta charset="UTF-8" />
+            <title>Toolbar</title>
+            <style>
+                html, body {{
+                    background: rgba(0, 0, 0, 0) !important;
+                    margin: 0;
+                    overflow: hidden !important;
+                }}
+                .toolbar-btn {{
+                    padding: 4px 10px;
+                    border: 1px solid transparent;
+                    border-radius: 6px;
+                    font-size: 12px;
+                    font-weight: 500;
+                    cursor: pointer;
+                    transition: background 0.3s, color 0.3s, border-color 0.3s;
+                    margin-right: 8px;
+                    min-height: 28px;
+                    min-width: 80px;
+                    background: transparent !important;
+                    outline: none;
+                }}
+                .light {{ background: #ffffff; color: #333; border-color: #dddddd; }}
+                .dark  {{ background: #2c2c2c; color: #f5f5f5; border-color: #444; }}
+                .toolbar-container {{
+                    display: flex;
+                    align-items: center;
+                    height: 32px;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="toolbar-container">
+                {explorer_btn}
+            </div>
+            <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+            <script>
+                var eb = null;
+                function updateBtnMode(mode) {{
+                    var eb = document.getElementById("explorerBtn");
+                    if (eb) {{
+                        eb.className = "toolbar-btn " + mode;
+                    }}
+                }}
+                new QWebChannel(qt.webChannelTransport, function(channel) {{
+                    window.bridge = channel.objects.bridge;
+                    eb = document.getElementById("explorerBtn");
+                    eb.onclick = function() {{
+                        bridge.goBackToExplorer();
+                    }};
+                    window.setBtnMode = updateBtnMode;
+                    setTimeout(function() {{
+                        updateBtnMode("{mode}");
+                    }}, 0);
+                }});
+            </script>
+        </body>
+        </html>
+        """
+        self.html_toolbar.setHtml(html_code)
+
+        self.html_toolbar.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.html_toolbar.setAttribute(Qt.WA_OpaquePaintEvent, False)
+        self.html_toolbar.page().setBackgroundColor(QColor(0, 0, 0, 0))
+
+    def _on_toolbar_load_finished(self, ok):
+        if ok:
+            js = f'window.setBtnMode && window.setBtnMode("{theme}");'
+            self.html_toolbar.page().runJavaScript(js)
+
+    def show_toolbar_with_theme_check(self):
+        self.html_toolbar.setVisible(True)
+        js = f'window.setBtnMode && window.setBtnMode("{theme}");'
+        self.html_toolbar.page().runJavaScript(js)
+
+    def add_buttons(self, layout):
+        super().add_buttons(layout)
+
+    def show_plugin_widget(self, widget: QWidget, title: str = ""):
+        container = QWidget()
+        v = QVBoxLayout(container)
+        v.setContentsMargins(8, 8, 8, 8)
+        header = QLabel(f"🧩 Plugin: {title}")
+        header.setStyleSheet("font-weight: bold; font-size: 15px; margin-bottom: 6px;")
+        v.addWidget(header)
+        v.addWidget(widget)
+        self.pages.addWidget(container)
+        self.pages.setCurrentWidget(container)
+        self.show_toolbar_with_theme_check()
+
     def show_explorer(self):
-        """Zeige wieder die Liste der Skript-Buttons"""
-        self.pages.setCurrentWidget(self.explorer_container)
-        self.toolbar_widget.setVisible(False)  # Toolbar komplett weg
+        self.pages.setCurrentWidget(self.scroll_area)
+        self.html_toolbar.setVisible(False)
+
+    def toggle_theme(self):
+        global theme
+        theme = "light" if is_dark() else "dark"
+        set_theme(theme, self.app)
+        self.update_button_styles(self.layout)
+        js = f'window.setBtnMode && window.setBtnMode("{theme}");'
+        self.html_toolbar.page().runJavaScript(js)
 
     def show_popup(self):
         self.add_buttons(self.layout)
         self.update_button_styles(self.layout)
+
+        # Toolbar HTML neu laden, damit Theme sicher immer stimmt:
+        self._build_html_toolbar()
+
+        # Alternativ statt HTML Neubau nur JS-Update senden (wenn bevorzugt):
+        # js = f'window.setBtnMode && window.setBtnMode("{theme}");'
+        # self.html_toolbar.page().runJavaScript(js)
+
         cursor_pos = QCursor.pos()
         start_x = cursor_pos.x()
         start_y = cursor_pos.y()
@@ -464,119 +512,203 @@ class PopupWindow(ButtonContentMixin, QWidget):
         event.ignore()
         self.hide()
 
-    def show_plugin_widget(self, widget: QWidget, title: str = ""):
-        """Zeigt ein Plugin direkt im Popup an (persistente Instanz)"""
-        container = QWidget()
-        v = QVBoxLayout(container)
-        v.setContentsMargins(8, 8, 8, 8)
+class ThemeBridge(QObject):
+    def __init__(self, main_window=None, popup=None):
+        super().__init__()
+        self.main_window = main_window
+        self.popup = popup
 
-        header = QLabel(f"🧩 Plugin: {title}")
-        header.setStyleSheet("font-weight: bold; font-size: 15px; margin-bottom: 6px;")
-        v.addWidget(header)
-        v.addWidget(widget)
+    @pyqtSlot()
+    def toggleTheme(self):
+        if self.main_window:
+            self.main_window.toggle_theme()
 
-        self.pages.addWidget(container)
-        self.pages.setCurrentWidget(container)
+    @pyqtSlot()
+    def goBackToExplorer(self):
+        if self.popup and self.popup.isVisible():
+            self.popup.show_explorer()
+        elif self.main_window:
+            self.main_window.go_back_to_explorer()
 
-        self.toolbar_widget.setVisible(True)  # Toolbar einblenden
-
-
-
-# ------------------------------
-# MainAppWindow mit QStackedWidget
-# ------------------------------
 class MainAppWindow(QMainWindow, ButtonContentMixin):
     def __init__(self, app, popup=None):
         super().__init__()
-        self.setWindowIcon(QIcon("ProgrammIcon.ico"))
+        self.setWindowIcon(QIcon("ProgrammIcon.ico") if os.path.exists("ProgrammIcon.ico") else QIcon())
         self.app = app
         self.popup = popup
 
-        self.dark_mode = False
-
-        self.setWindowFlags(Qt.FramelessWindowHint)
         self.setMinimumSize(900, 620)
 
         self.central = QWidget()
         self.central_layout = QVBoxLayout(self.central)
         self.central_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.title_bar = CustomTitleBar(self, "Skript Starter – Hauptfenster")
-        self.central_layout.addWidget(self.title_bar)
-
-        # Toggle-Button bleibt oben sichtbar
         toolbar = QHBoxLayout()
-        self.toggle_button = QPushButton("Wechsle Theme")
-        self.toggle_button.clicked.connect(self.toggle_theme)
-        self.back_to_explorer_btn = QPushButton("← Explorer")
-        self.back_to_explorer_btn.clicked.connect(self.go_back_to_explorer)
-        self.back_to_explorer_btn.hide()  # erst mal unsichtbar
+        self.html_toolbar = QWebEngineView() if WEBENGINE_AVAILABLE else QWidget()
+        if WEBENGINE_AVAILABLE:
+            try:
+                self.html_toolbar.page().setBackgroundColor(Qt.transparent)
+                self.html_toolbar.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
+            except Exception:
+                pass
+        self.show_explorer_btn = False
+        self._build_html_toolbar()
+        if WEBENGINE_AVAILABLE:
+            try:
+                self.channel = QWebChannel()
+                self.bridge = ThemeBridge(main_window=self, popup=self.popup)
+                self.channel.registerObject("bridge", self.bridge)
+                self.html_toolbar.page().setWebChannel(self.channel)
+            except Exception:
+                pass
 
-        toolbar.addWidget(self.toggle_button)
-        toolbar.addWidget(self.back_to_explorer_btn)
+        if WEBENGINE_AVAILABLE:
+            self.html_toolbar.setFixedHeight(44)
+            self.html_toolbar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        toolbar.addWidget(self.html_toolbar)
         toolbar.addStretch()
-        tb = QWidget(); tb.setLayout(toolbar)
+
+        tb = QWidget()
+        tb.setLayout(toolbar)
         self.central_layout.addWidget(tb)
 
-        # Explorer: separater Container für Skript-Buttons
+        self.pages = QStackedWidget()
+
         self.button_container = QWidget()
         self.layout = QVBoxLayout(self.button_container)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
 
-        # Seitenverwaltung
-        self.pages = QStackedWidget()
-        self.pages.addWidget(self.button_container)  # Index 0: Explorer
-        self.central_layout.addWidget(self.pages)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QScrollArea.NoFrame)
+        self.scroll_area.setStyleSheet("""
+            QScrollArea { background: transparent; }
+            QScrollBar:vertical {
+                background: #292929;
+                width: 10px;
+                margin: 0;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical {
+                background: #666;
+                min-height: 20px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                background: none;
+                height: 0;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
+        self.scroll_area.setWidget(self.button_container)
 
+        self.pages.addWidget(self.scroll_area)
+        self.central_layout.addWidget(self.pages)
         self.setCentralWidget(self.central)
 
-        # Init Buttons
         self.init_button_state()
         self.add_buttons(self.layout)
-
-        # Plugin-Loader an Mixin durchreichen
         self.set_plugin_loader(self.load_plugin_from_path)
 
-        # Theme setzen
-        self.toggle_theme()
+    def _build_html_toolbar(self):
+        mode = theme
+        explorer_btn = f'<button id="explorerBtn" class="toolbar-btn {mode}" style="margin-left:7px;">← Explorer</button>' if self.show_explorer_btn else ''
+        html_code = f"""
+        <!DOCTYPE html>
+        <html lang="de">
+        <head>
+            <meta charset="UTF-8">
+            <title>Toolbar</title>
+            <style>
+                html, body {{
+                    overflow: hidden !important;
+                    margin: 0;
+                    background: transparent;
+                }}
+                .toolbar-btn {{
+                    padding: 8px 16px;
+                    border: 1px solid #ccc;
+                    border-radius: 6px;
+                    font-size: 14px;
+                    font-weight: 500;
+                    cursor: pointer;
+                    transition: background 0.3s, color 0.3s, border-color 0.3s;
+                    margin-right: 8px;
+                }}
+                .light {{ background: #ffffff; color: #333; border-color: #dddddd; }}
+                .dark  {{ background: #2c2c2c; color: #f5f5f5; border-color: #444; }}
+                .toolbar-container {{ display: flex; align-items: center; height: 40px; }}
+            </style>
+        </head>
+        <body>
+            <div class="toolbar-container">
+                <button id="themeBtn" class="toolbar-btn {mode}">Wechsle Theme</button>
+                {explorer_btn}
+            </div>
+            <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+            <script>
+            new QWebChannel(qt.webChannelTransport, function(channel) {{
+                window.bridge = channel.objects.bridge;
+            }});
+            document.getElementById("themeBtn").className = "toolbar-btn " + "{mode}";
+            document.getElementById("themeBtn").onclick = function() {{
+                bridge.toggleTheme();
+                popup.toggleTheme();
+            }};
+            function setBtnMode(mode){{
+              document.getElementById("themeBtn").className = "toolbar-btn " + mode;
+              var eb = document.getElementById("explorerBtn");
+              if(eb) eb.className = "toolbar-btn " + mode;
+            }}
+            var eb = document.getElementById("explorerBtn");
+            if(eb) eb.onclick = function(){{
+               bridge.goBackToExplorer();
+            }};
+            window.setBtnMode = setBtnMode;
+            </script>
+        </body>
+        </html>
+        """
+        try:
+            if WEBENGINE_AVAILABLE:
+                self.html_toolbar.setHtml(html_code)
+        except Exception:
+            print("Fehler beim Setzen der Toolbar HTML:", traceback.format_exc())
 
     def toggle_theme(self):
-        self.dark_mode = not self.dark_mode
-        self.app.setStyleSheet(dark_mode_stylesheet if self.dark_mode else light_mode_stylesheet)
+        global theme
+        theme = "light" if is_dark() else "dark"
+        set_theme(theme, self.app)
         self.update_button_styles(self.layout)
         if self.popup:
-            self.popup.dark_mode = self.dark_mode
             self.popup.update_button_styles(self.popup.layout)
+        self._build_html_toolbar()
 
     def go_back_to_explorer(self):
-        self.back_to_explorer_btn.hide()
-        self.pages.setCurrentWidget(self.button_container)
+        self.pages.setCurrentWidget(self.scroll_area)
+        self.show_explorer_btn = False
+        self._build_html_toolbar()
 
-    # --------------------------
-    # Plugin laden/anzeigen
-    # --------------------------
     def load_plugin_from_path(self, path: str, source_widget=None):
-        """Plugin im Hauptfenster oder Popup laden"""
         try:
             if path.lower().endswith('.py'):
-                mode = "popup" if isinstance(source_widget, PopupWindow) else "window"
-                widget = self.load_python_plugin_widget(path, mode=mode)
+                widget = self.load_python_plugin_widget(path)
                 if widget is None:
                     QMessageBox.warning(source_widget or self, "Kein Plugin",
-                                        f"{os.path.basename(path)} enthält keine Klasse 'PluginWidget'.")
+                        f"{os.path.basename(path)} enthält keine Klasse 'PluginWidget'.")
                     return
             elif path.lower().endswith('.html'):
                 widget = HtmlPluginContainer(path)
             else:
                 subprocess.Popen([sys.executable, path])
                 return
-
             if isinstance(source_widget, PopupWindow):
-                # Im Popup anzeigen
                 source_widget.show_plugin_widget(widget, os.path.basename(path))
             else:
-                # Hauptfenster
                 container = QWidget()
                 v = QVBoxLayout(container)
                 v.setContentsMargins(12, 12, 12, 12)
@@ -586,89 +718,52 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                 v.addWidget(widget)
                 self.pages.addWidget(container)
                 self.pages.setCurrentWidget(container)
-                self.back_to_explorer_btn.show()
-
+                self.show_explorer_btn = True
+                self._build_html_toolbar()
         except Exception as e:
             QMessageBox.critical(source_widget or self, "Fehler beim Laden", f"{e}")
 
     def load_python_plugin_widget(self, path: str, mode="window"):
-        module_name = os.path.splitext(os.path.basename(path))[0]
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        if spec is None or spec.loader is None:
+        try:
+            spec = importlib.util.spec_from_file_location("plugin_module", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            cls = getattr(mod, "PluginWidget", None)
+            if cls is not None and isinstance(cls, type):
+                return cls()
             return None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        if hasattr(module, 'PluginWidget'):
-            # Übergibt theme + mode an Plugin
-            widget = module.PluginWidget(
-                theme="dark" if self.dark_mode else "light",
-                mode=mode
-            )
-            return widget
-        return None
+        except Exception:
+            return None
 
-    def show_plugin_widget(self, widget: QWidget, title: str = ""):
-        # Optional: Titel über Plugin zeigen
-        container = QWidget()
-        v = QVBoxLayout(container)
-        v.setContentsMargins(12, 12, 12, 12)
-        header = QLabel(f"🧩 Plugin: {title}")
-        header.setStyleSheet("font-weight: bold; font-size: 15px; margin-bottom: 8px;")
-        v.addWidget(header)
-        v.addWidget(widget)
-
-        # Seite einfügen & anzeigen
-        self.pages.addWidget(container)
-        self.pages.setCurrentWidget(container)
-
-        self.back_to_explorer_btn.show()
-
-
-# ------------------------------
-# TrayApp
-# ------------------------------
 class TrayApp(QApplication):
     def __init__(self, sys_argv):
         super().__init__(sys_argv)
         self.setQuitOnLastWindowClosed(False)
-        self.setStyleSheet(dark_mode_stylesheet)
-
-        self.popup = PopupWindow()
+        self.setStyleSheet(current_stylesheet())
+        self.popup = PopupWindow(app=self)
         self.main_window = MainAppWindow(self, popup=self.popup)
-
-        # Verbinde Popup-Mixin mit dem Plugin-Loader des MainWindows
         self.popup.set_plugin_loader(self.main_window.load_plugin_from_path)
-
         self.tray = QSystemTrayIcon()
-        self.tray.setIcon(QIcon("TrayIcon.ico"))
+        self.tray.setIcon(QIcon("TrayIcon.ico") if os.path.exists("TrayIcon.ico") else QIcon())
         self.tray.setVisible(True)
-
         self.tray.activated.connect(self.on_tray_activated)
 
     def on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.Context:
             self.popup.show_popup()
         elif reason == QSystemTrayIcon.Trigger:
-            # Linksklick auf Tray-Icon: Fenster anzeigen oder in den Vordergrund holen
             if self.main_window.isMinimized() or not self.main_window.isVisible():
-                self.main_window.showNormal()   # Fenster wiederherstellen, falls minimiert
+                self.main_window.showNormal()
                 self.main_window.activateWindow()
                 self.main_window.raise_()
             else:
-                # Wenn schon sichtbar, einfach in den Vordergrund bringen
                 self.main_window.activateWindow()
                 self.main_window.raise_()
 
-
-# ------------------------------
-# Einstiegspunkt
-# ------------------------------
 if __name__ == "__main__":
-    # Windows: Application ID setzen (Taskleisten-Gruppierung/Icon)
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(u"meinefirma.skriptstarter.1.0")
     except Exception:
         pass
-
     app = TrayApp(sys.argv)
     sys.exit(app.exec_())
