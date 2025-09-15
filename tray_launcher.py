@@ -3,12 +3,13 @@ import os
 import subprocess
 import importlib.util
 import traceback
+from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QSystemTrayIcon, QMainWindow, QSizePolicy, QHBoxLayout, QLabel,
     QStackedWidget, QMessageBox, QScrollArea
 )
-from PyQt5.QtGui import QCursor, QIcon, QColor
+from PyQt5.QtGui import QCursor, QIcon, QColor, QGuiApplication
 from PyQt5.QtCore import (
     Qt, QRect, QPoint, QFileSystemWatcher, QObject, pyqtSlot, QUrl, QPropertyAnimation, QEasingCurve
 )
@@ -21,6 +22,11 @@ except Exception:
 
 from screeninfo import get_monitors
 import ctypes
+
+# --- High DPI Scaling aktivieren ---
+QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+# -----------------------------------
 
 # --- Globale Theme-Variable ---
 theme = "dark"
@@ -319,12 +325,13 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.bridge = ThemeBridge(main_window=None, popup=self)
         self.channel.registerObject("bridge", self.bridge)
 
-        self.html_toolbar = QWebEngineView(self)
-        self.html_toolbar.setFixedHeight(32)
-        self.html_toolbar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.html_toolbar.page().setWebChannel(self.channel)
-        self.html_toolbar.loadFinished.connect(self._on_toolbar_load_finished)
-        self.html_toolbar.setVisible(False)
+        self.html_toolbar = QWebEngineView(self) if WEBENGINE_AVAILABLE else QWidget(self)
+        if WEBENGINE_AVAILABLE:
+            self.html_toolbar.setFixedHeight(32)
+            self.html_toolbar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            self.html_toolbar.page().setWebChannel(self.channel)
+            self.html_toolbar.loadFinished.connect(self._on_toolbar_load_finished)
+            self.html_toolbar.setVisible(False)
 
         self._build_html_toolbar()
 
@@ -368,14 +375,20 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.main_layout.addWidget(self.html_toolbar)
         self.main_layout.addWidget(self.pages)
 
-        screen = get_monitors()[0]
-        self.width_size = int(screen.width * 0.15)
-        self.height_size = int(screen.height * 0.5)
+        self.update_relative_size()
         self.setFixedSize(self.width_size, self.height_size)
 
         self.animation = QPropertyAnimation(self, b"geometry")
         self.animation.setDuration(500)
         self.animation.setEasingCurve(QEasingCurve.OutCubic)
+
+    def update_relative_size(self):
+        screen = QGuiApplication.screenAt(QCursor.pos())
+        if not screen:
+            screen = QGuiApplication.primaryScreen()
+        geometry = screen.geometry()
+        self.width_size = int(geometry.width() * 0.15)
+        self.height_size = int(geometry.height() * 0.5)
 
     def _build_html_toolbar(self):
         mode = theme
@@ -443,11 +456,11 @@ class PopupWindow(ButtonContentMixin, QWidget):
         </body>
         </html>
         """
-        self.html_toolbar.setHtml(html_code)
-
-        self.html_toolbar.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.html_toolbar.setAttribute(Qt.WA_OpaquePaintEvent, False)
-        self.html_toolbar.page().setBackgroundColor(QColor(0, 0, 0, 0))
+        if WEBENGINE_AVAILABLE:
+            self.html_toolbar.setHtml(html_code)
+            self.html_toolbar.setAttribute(Qt.WA_TranslucentBackground, True)
+            self.html_toolbar.setAttribute(Qt.WA_OpaquePaintEvent, False)
+            self.html_toolbar.page().setBackgroundColor(QColor(0, 0, 0, 0))
 
     def _on_toolbar_load_finished(self, ok):
         if ok:
@@ -489,14 +502,9 @@ class PopupWindow(ButtonContentMixin, QWidget):
     def show_popup(self):
         self.add_buttons(self.layout)
         self.update_button_styles(self.layout)
-
-        # Toolbar HTML neu laden, damit Theme sicher immer stimmt:
         self._build_html_toolbar()
-
-        # Alternativ statt HTML Neubau nur JS-Update senden (wenn bevorzugt):
-        # js = f'window.setBtnMode && window.setBtnMode("{theme}");'
-        # self.html_toolbar.page().runJavaScript(js)
-
+        self.update_relative_size()
+        self.setFixedSize(self.width_size, self.height_size)
         cursor_pos = QCursor.pos()
         start_x = cursor_pos.x()
         start_y = cursor_pos.y()
@@ -536,8 +544,8 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.setWindowIcon(QIcon("ProgrammIcon.ico") if os.path.exists("ProgrammIcon.ico") else QIcon())
         self.app = app
         self.popup = popup
-
-        self.setMinimumSize(900, 620)
+        self.update_relative_size()
+        self.setMinimumSize(self.width_size, self.height_size)
 
         self.central = QWidget()
         self.central_layout = QVBoxLayout(self.central)
@@ -613,6 +621,14 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.init_button_state()
         self.add_buttons(self.layout)
         self.set_plugin_loader(self.load_plugin_from_path)
+
+    def update_relative_size(self):
+        screen = QGuiApplication.screenAt(self.pos())
+        if not screen:
+            screen = QGuiApplication.primaryScreen()
+        geometry = screen.geometry()
+        self.width_size = int(geometry.width() * 0.5)
+        self.height_size = int(geometry.height() * 0.7)
 
     def _build_html_toolbar(self):
         mode = theme
