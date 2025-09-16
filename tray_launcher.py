@@ -657,7 +657,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
     def _build_html_toolbar(self):
         mode = theme
         # Explorer-Button nur wenn show_explorer_btn True ist
-        explorer_btn = f'<button id="explorerBtn" class="toolbar-btn {mode}" style="margin-left:20px; display:{"inline-block" if self.show_explorer_btn else "none"};">← Explorer</button>'
+        explorer_btn = f'<button id="explorerBtn" class="toolbar-btn {mode}" style="margin-left:1.5rem; display:{"inline-block" if self.show_explorer_btn else "none"};">← Explorer</button>'
 
         html_code = f"""
         <!DOCTYPE html>
@@ -673,15 +673,15 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                 }}
 
                 .toolbar-btn {{
-                    padding: 4px 10px;
-                    border: 1px solid transparent;
-                    border-radius: 6px;
-                    font-size: 14px;
+                    padding: 0.25em 0.675em;
+                    border: 0.07em solid transparent;
+                    border-radius: 0.38em;
+                    font-size: 1em;
                     font-weight: 500;
                     cursor: pointer;
                     transition: background 0.3s, color 0.3s, border-color 0.3s;
-                    min-height: 35px;
-                    min-width: 80px;
+                    min-height: 2.25em;
+                    min-width: 5em;
                     background: transparent !important;
                     outline: none;
                 }}
@@ -690,10 +690,10 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
 
                 .toolbar-container {{
                     display: flex;
-                    align-items: center; 
-                    height: 2.5rem;          
-                    padding: 0 1rem;  
-                    gap: 8px;
+                    align-items: center;
+                    height: 2.5rem;
+                    padding: 0 2vw;
+                    gap: 0.5em;
                     background: transparent !important;
                 }}
 
@@ -755,8 +755,8 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                   border-radius: 50%;
                   transition: 0.3s all ease;
                 }}
-                .stars1 {{ top: 3px; right: 13px; }}
-                .stars2 {{ top: 20px; right: 28px; }}
+                .stars1 {{ top: 0.2em; right: 0.8em; }}
+                .stars2 {{ top: 1.3em; right: 1.75em; }}
 
                 .stars1:after,
                 .stars1:before,
@@ -788,8 +788,8 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
 
                 .sun-moon .dots {{
                   position: absolute;
-                  top: 1.5px;
-                  left: 11.5px;
+                  top: 0.1em;
+                  left: 0.7em;
                   height: 0.5rem;
                   width: 0.5rem;
                   background: #EFEEDB;
