@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>HTML Timer</title>
+<style>
+  body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
+  h1 { font-size: 20px; }
+  .time { font-size: 32px; margin: 12px 0; }
+  button { padding: 8px 12px; margin-right: 8px; }
+</style>
+</head>
+<body>
+  <h1>⏱️ HTML Timer (Demo)</h1>
+  <div class="time" id="t">0 s</div>
+  <button onclick="start()">Start</button>
+  <button onclick="stop()">Stop</button>
+  <button onclick="reset()">Reset</button>
+  <script>
+    let sec = 0; let itv = null;
+    function tick(){ sec++; document.getElementById('t').textContent = sec + ' s'; }
+    function start(){ if(!itv) itv = setInterval(tick, 1000); }
+    function stop(){ if(itv){ clearInterval(itv); itv = null; } }
+    function reset(){ sec = 0; document.getElementById('t').textContent = '0 s'; }
+  </script>
+</body>
+</html>
