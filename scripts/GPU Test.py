@@ -18,6 +18,7 @@ class PluginWidget(QMainWindow):
 
         # Lade die Spezial-URL zum Hardware-Test
         self.browser.setUrl(QUrl("chrome://gpu"))
+        #self.browser.setUrl(QUrl("https://webglsamples.org/"))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

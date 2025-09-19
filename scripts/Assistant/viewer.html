@@ -39,7 +39,7 @@
 
       const loader = new THREE.GLTFLoader();
       loader.load(
-        "./models/AppearanceMikuBlender.glb",
+        "./models/AppearanceMikuBlenderV2.glb",
         function(gltf) {
           // Material-Fixes
           gltf.scene.traverse((child) => {
@@ -59,12 +59,12 @@
               mat.depthWrite = true;
               mat.depthTest = true;
 
-              // 🔹 Encoding-Warnung beheben
+              //Encoding-Warnung beheben
               if (mat.map) {
                 mat.map.colorSpace = THREE.SRGBColorSpace;
               }
 
-              // 🔹 Namen bereinigen (gegen Shader-Fehler)
+              //Namen bereinigen (gegen Shader-Fehler)
               if (child.name) {
                 child.name = child.name.replace(/[^\x00-\x7F]/g, "_");
               }
