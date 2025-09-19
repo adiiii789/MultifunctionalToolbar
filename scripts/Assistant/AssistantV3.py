@@ -1,8 +1,11 @@
 import sys
 import os
+
+from PyQt5 import QtWebEngineWidgets
 from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 from PyQt5.QtCore import QUrl
-from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
+from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage, QWebEngineSettings
+
 
 class WebEnginePage(QWebEnginePage):
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
@@ -17,17 +20,21 @@ class PluginWidget(QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
         self.browser = QWebEngineView()
+        self.browser.settings().setAttribute(QWebEngineSettings.WebGLEnabled, True)
+        self.browser.settings().setAttribute(QWebEngineSettings.Accelerated2dCanvasEnabled, True)
+        self.browser.page().setDevToolsPage(QtWebEngineWidgets.QWebEnginePage())
         layout.addWidget(self.browser)
         self.setCentralWidget(central)
 
         base_path = os.path.abspath(os.path.dirname(__file__))
-        html_path = os.path.join(base_path, "viewer.html")
-        self.browser.setUrl(QUrl.fromLocalFile(html_path))
+        #html_path = os.path.join(base_path, "viewer.html")
+        #self.browser.setUrl(QUrl.fromLocalFile(html_path))
 
         page = WebEnginePage(self.browser)
         self.browser.setPage(page)
 
-        self.browser.setUrl(QUrl("http://localhost:63342/MultifunctionalToolbar/scripts/Assistant/viewerV2.html?_ijt=7bf2ktp07msbi4f1pqin3r2pom&_ij_reload=RELOAD_ON_SAVE"))
+        self.browser.setUrl(QUrl("http://localhost:63342/MultifunctionalToolbar/scripts/Assistant/viewerV2.html?_ijt"
+                                 "=nofrh9eoqr6kg2e48942flslqq&_ij_reload=RELOAD_ON_SAVE"))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

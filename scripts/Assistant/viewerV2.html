@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <title>GLB Viewer mit Three.js</title>
+  <title>GLB Viewer mit Three.js (ohne OrbitControls)</title>
   <style>
     body { margin: 0; overflow: hidden; }
     canvas { display: block; }
@@ -13,91 +13,146 @@
   <script src="https://cdn.jsdelivr.net/npm/three/examples/js/loaders/GLTFLoader.js"></script>
 
   <script>
-    let scene, camera, renderer, controls;
+    let scene, camera, renderer, mixer;
+    const morphMeshes = [];
+    let blinkDuration = 0.5;
+    let blinkTimer = 0;
+    let blinkInterval = getRandomInterval();
+    let blinking = false;
+    let mouthOpen = 0;
+
+    function getRandomInterval() {
+      return 2 + Math.random() * 5; // 2-7 Sekunden
+    }
 
     function init() {
-      scene = new THREE.Scene();
+  scene = new THREE.Scene();
 
-      camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
-      camera.position.set(0, 0.73, 1.6);
+  // Kamera fix positioniert
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera.position.set(0, 2, 1.5);
+  camera.lookAt(new THREE.Vector3(0, 0, 0));
 
-      renderer = new THREE.WebGLRenderer({antialias: true});
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.setClearColor(0x2e2e2e);
-      document.body.appendChild(renderer.domElement);
+  // Renderer: erst versuchen WebGL2, dann Fallback auf WebGL1
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    console.log("✅ Renderer: WebGL2");
+  } catch (e) {
+    renderer = new THREE.WebGL1Renderer({ antialias: true });
+    console.warn("⚠️ Renderer: Fallback auf WebGL1");
+  }
 
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-      scene.add(ambientLight);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(0x2e2e2e);
+  document.body.appendChild(renderer.domElement);
 
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-      directionalLight.position.set(5, 10, 7);
-      scene.add(directionalLight);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  scene.add(ambientLight);
 
-      const loader = new THREE.GLTFLoader();
-      loader.load(
-        "./models/AppearanceMikuBlender.glb",
-        function(gltf) {
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  directionalLight.position.set(5, 10, 7);
+  scene.add(directionalLight);
 
-            scene.add(gltf.scene);
+  const loader = new THREE.GLTFLoader();
+  loader.load("./models/AppearanceMikuBlender.glb",
+    function (gltf) {
+      gltf.scene.traverse((child) => {
 
-            // Animationen laden und Mixer erstellen
-            if (gltf.animations && gltf.animations.length) {
-                mixer = new THREE.AnimationMixer(gltf.scene);
+        if (child.isMesh) {
+          let mat = child.material;
 
-                // Erste Animation abspielen
-                const action = mixer.clipAction(gltf.animations[0]);
-                action.play();
-            }
-          // Material-Fixes
-          gltf.scene.traverse((child) => {
-            if (child.isMesh) {
-                /*console.log("Mesh Name:", child.name);
-                console.log("Material Name:", child.material.name);*/
-              let mat = child.material;
+          // Material-Fix NUR wenn nötig
+          if (mat.transparent) {
+            mat.alphaTest = 0.5;
+          }
 
-              //Meine inkompetenz mit Blender in Code gefixed :J
-              if (mat.opacity === 1) {
-                mat.transparent = true;
-                mat.alphaTest = 0.5; // Literally
-                mat.depthWrite = false;
-              } else {
-                  mat.transparent = false;
-                }
-              mat.depthWrite = true;
-              mat.depthTest = true;
+          mat.depthWrite = true;
+          mat.depthTest = true;
 
-              // 🔹 Encoding-Warnung beheben
-              if (mat.map) {
-                mat.map.colorSpace = THREE.SRGBColorSpace;
-              }
+          if (mat.map) {
+            mat.map.colorSpace = THREE.SRGBColorSpace;
+          }
 
-              // 🔹 Namen bereinigen (gegen Shader-Fehler)
-              if (child.name) {
-                child.name = child.name.replace(/[^\x00-\x7F]/g, "_");
-              }
-            }
-          });
+          // Debug-Ausgabe
+          console.log(`Mesh geladen: ${child.name}, MorphTargets: ${child.morphTargetInfluences ? child.morphTargetInfluences.length : 0}`);
 
-          scene.add(gltf.scene);
-          console.log("✅ GLB-Modell geladen");
-        },
-        function(xhr) {
-          console.log(`Ladefortschritt: ${(xhr.loaded / xhr.total * 100).toFixed(2)}%`);
-        },
-        function(error) {
-          console.error("❌ Fehler beim Laden:", error);
+          if (child.morphTargetInfluences && child.morphTargetInfluences.length > 0) {
+            morphMeshes.push(child);
+          }
         }
-      );
-
-      window.addEventListener("resize", () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
       });
+
+      scene.add(gltf.scene);
+
+      if (gltf.animations && gltf.animations.length) {
+        mixer = new THREE.AnimationMixer(gltf.scene);
+        const action = mixer.clipAction(gltf.animations[0]);
+        action.play();
+      }
+    },
+    undefined,
+    function (error) {
+      console.error("❌ Fehler beim Laden:", error);
     }
+  );
+
+  // Kamera-Licht
+  const cameraLight = new THREE.SpotLight(0xffffff, 2);
+  camera.add(cameraLight);
+  camera.add(cameraLight.target);
+  scene.add(camera);
+
+  window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // Event für Mund aktivieren
+  window.addEventListener("keydown", (event) => {
+    if (event.key.toLowerCase() === "m") {
+      mouthOpen = mouthOpen === 0 ? 1 : 0;
+    }
+  });
+}
+
 
     function animate() {
       requestAnimationFrame(animate);
+
+      if (mixer) mixer.update(0.016);
+
+      blinkTimer += 0.016;
+      if (!blinking && blinkTimer >= blinkInterval) {
+        blinking = true;
+        blinkTimer = 0;
+      }
+
+      let blinkValue = 0;
+      if (blinking) {
+        let progress = blinkTimer / blinkDuration;
+        if (progress < 1) {
+          blinkValue = progress;
+        } else if (progress < 2) {
+          blinkValue = 2 - progress;
+        } else {
+          blinkValue = 0;
+          blinking = false;
+          blinkTimer = 0;
+          blinkInterval = getRandomInterval();
+        }
+      }
+
+      morphMeshes.forEach(mesh => {
+        const blinkIndex = mesh.morphTargetDictionary["Blinzeln"];
+          mesh.morphTargetInfluences[blinkIndex] = blinkValue;
+
+
+        const mouthIndex = mesh.morphTargetDictionary["O_O"];
+          mesh.morphTargetInfluences[mouthIndex] = mouthOpen;
+        
+      });
+
       renderer.render(scene, camera);
     }
 
