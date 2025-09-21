@@ -9,31 +9,90 @@
   </style>
 </head>
 <body>
-  <script src="https://cdn.jsdelivr.net/npm/three/build/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three/examples/js/loaders/GLTFLoader.js"></script>
+<div id="chat-container" style="
+   position: fixed;
+  bottom: 2vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40vw;
+  max-height: 30vh;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  font-family: sans-serif;
+  padding: 1vh 1vw;
+  overflow-y: auto;
+  border-radius: 0.5vh;
+  z-index: 1000;
+">
+  <div id="chat-messages" style="
+  max-height: 22vh;
+  overflow-y: auto;
+  margin-bottom: 1vh;
+  ">
+  </div>
+  <input type="text" id="chat-input" placeholder="Schreibe hier..." style="
+    width: 100%;
+    padding: 1vh 1vw;
+    box-sizing: border-box;
+    border-radius: 0.3vh;
+    border: none;
+    font-size: 1.6vh;
+  "/>
+</div>
 
-  <script>
-    let scene, camera, renderer, mixer;
-    const morphMeshes = [];
-    let blinkDuration = 0.5;
-    let blinkTimer = 0;
-    let blinkInterval = getRandomInterval();
-    let blinking = false;
-    let mouthOpen = 0;
+<script src="https://cdn.jsdelivr.net/npm/three/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three/examples/js/loaders/GLTFLoader.js"></script>
 
-    function getRandomInterval() {
-      return 2 + Math.random() * 5; // 2-7 Sekunden
-    }
+<script>
+let scene, camera, renderer, mixer;
+const morphMeshes = [];
 
-    function init() {
+// Blink-Variablen
+let blinkDuration = 0.1;
+let blinkTimer = 0;
+let blinkInterval = getRandomInterval();
+let blinking = false;
+
+// Mund-Animation
+let activeMouthMorphs = {}; // mehrere Morphs gleichzeitig
+let mouthAnimationQueue = [];
+let mouthAnimating = false;
+const mouthTransitionDuration = 100;
+
+// Manueller Mund
+let manualMouthOpen = false;
+
+// Chat
+const chatInput = document.getElementById("chat-input");
+const chatMessages = document.getElementById("chat-messages");
+
+chatInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && chatInput.value.trim() !== "") {
+    const message = chatInput.value.trim();
+    addMessage("Du", message);
+    chatInput.value = "";
+    animateMouthFromText(message);
+  }
+});
+
+function addMessage(sender, text) {
+  const messageElem = document.createElement("div");
+  messageElem.style.marginBottom = "5px";
+  messageElem.innerHTML = `<strong>${sender}:</strong> ${text}`;
+  chatMessages.appendChild(messageElem);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function getRandomInterval() {
+  return 1 + Math.random() * 5;
+}
+
+// ---- Three.js Setup ----
+function init() {
   scene = new THREE.Scene();
-
-  // Kamera fix positioniert
   camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-  camera.position.set(0, 2, 1.5);
-  camera.lookAt(new THREE.Vector3(0, 0, 0));
+  camera.position.set(0, 0.7, 1.7);
 
-  // Renderer: erst versuchen WebGL2, dann Fallback auf WebGL1
   try {
     renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     console.log("✅ Renderer: WebGL2");
@@ -46,38 +105,27 @@
   renderer.setClearColor(0x2e2e2e);
   document.body.appendChild(renderer.domElement);
 
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 3);
   scene.add(ambientLight);
 
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-  directionalLight.position.set(5, 10, 7);
+  const directionalLight = new THREE.DirectionalLight(0x2e2e2e, 10);
+  directionalLight.position.set(70, -50, -100);
   scene.add(directionalLight);
 
   const loader = new THREE.GLTFLoader();
   loader.load("./models/AppearanceMikuBlender.glb",
     function (gltf) {
       gltf.scene.traverse((child) => {
-
         if (child.isMesh) {
           let mat = child.material;
-
-          // Material-Fix NUR wenn nötig
-          if (mat.transparent) {
-            mat.alphaTest = 0.5;
-          }
-
+          if (mat.transparent) mat.alphaTest = 0.5;
           mat.depthWrite = true;
           mat.depthTest = true;
-
-          if (mat.map) {
-            mat.map.colorSpace = THREE.SRGBColorSpace;
-          }
-
-          // Debug-Ausgabe
-          console.log(`Mesh geladen: ${child.name}, MorphTargets: ${child.morphTargetInfluences ? child.morphTargetInfluences.length : 0}`);
+          if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
 
           if (child.morphTargetInfluences && child.morphTargetInfluences.length > 0) {
             morphMeshes.push(child);
+            console.log(`Mesh geladen: ${child.name}, MorphTargets: ${Object.keys(child.morphTargetDictionary)}`);
           }
         }
       });
@@ -96,7 +144,6 @@
     }
   );
 
-  // Kamera-Licht
   const cameraLight = new THREE.SpotLight(0xffffff, 2);
   camera.add(cameraLight);
   camera.add(cameraLight.target);
@@ -107,57 +154,148 @@
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
+}
 
-  // Event für Mund aktivieren
-  window.addEventListener("keydown", (event) => {
-    if (event.key.toLowerCase() === "m") {
-      mouthOpen = mouthOpen === 0 ? 1 : 0;
-    }
+// ---- Viseme Mapping ----
+const visemeMorphTargets = {
+  "AI": "a",
+  "E": "e",
+  "I": "i",
+  "O": "o",
+  "U": "u",
+  "FV": "eeehh",
+  "MBP": "oωo",
+  "L": "hehe mund",
+  "WQ": "yu"
+};
+
+// ---- Mundanimation aus Text ----
+function animateMouthFromText(text) {
+  let visemeSequence = [];
+  const upper = text.toUpperCase();
+
+  for (let i = 0; i < upper.length; i++) {
+    const c = upper[i];
+    if ("AE".includes(c)) visemeSequence.push("AI");
+    else if (c === "I") visemeSequence.push("I");
+    else if (c === "O") visemeSequence.push("O");
+    else if (c === "U") visemeSequence.push("U");
+    else if ("FV".includes(c)) visemeSequence.push("FV");
+    else if ("MBP".includes(c)) visemeSequence.push("MBP");
+    else if (c === "L") visemeSequence.push("L");
+    else if ("WQ".includes(c)) visemeSequence.push("WQ");
+  }
+
+  if (visemeSequence.length === 0) return;
+
+  mouthAnimationQueue = visemeSequence;
+  if (!mouthAnimating) {
+    mouthAnimating = true;
+    animateNextMouthSmooth();
+  }
+}
+
+function animateNextMouthSmooth() {
+  if (mouthAnimationQueue.length === 0) {
+    // Alle Morphs zurücksetzen
+    Object.keys(activeMouthMorphs).forEach(m => setMouthInfluence(0, m));
+    mouthAnimating = false;
+    return;
+  }
+
+  const visemeKey = mouthAnimationQueue.shift();
+  const morphName = visemeMorphTargets[visemeKey];
+
+  // Öffnen
+  smoothSetMouthInfluence(0.5, morphName, mouthTransitionDuration, () => {
+    // Schließen
+    smoothSetMouthInfluence(0, morphName, mouthTransitionDuration * 0.7, () => {
+      setTimeout(() => {
+        animateNextMouthSmooth();
+      }, 80);
+    });
   });
 }
 
+// ---- Smooth Animation ----
+function smoothSetMouthInfluence(targetValue, morphName, duration, onComplete) {
+  const startValue = activeMouthMorphs[morphName] || 0;
+  const startTime = performance.now();
 
-    function animate() {
-      requestAnimationFrame(animate);
+  function step() {
+    const now = performance.now();
+    const elapsed = now - startTime;
+    let t = elapsed / duration;
+    if (t > 1) t = 1;
 
-      if (mixer) mixer.update(0.016);
+    const newValue = startValue + (targetValue - startValue) * t;
+    setMouthInfluence(newValue, morphName);
 
-      blinkTimer += 0.016;
-      if (!blinking && blinkTimer >= blinkInterval) {
-        blinking = true;
-        blinkTimer = 0;
-      }
+    if (t < 1) requestAnimationFrame(step);
+    else if (onComplete) onComplete();
+  }
+  step();
+}
 
-      let blinkValue = 0;
-      if (blinking) {
-        let progress = blinkTimer / blinkDuration;
-        if (progress < 1) {
-          blinkValue = progress;
-        } else if (progress < 2) {
-          blinkValue = 2 - progress;
-        } else {
-          blinkValue = 0;
-          blinking = false;
-          blinkTimer = 0;
-          blinkInterval = getRandomInterval();
-        }
-      }
+// ---- Set Mouth Influence (für mehrere Morphs gleichzeitig) ----
+function setMouthInfluence(value, morphName) {
+  if (!morphName) return;
+  activeMouthMorphs[morphName] = value;
+  if (value === 0) delete activeMouthMorphs[morphName];
+}
 
-      morphMeshes.forEach(mesh => {
-        const blinkIndex = mesh.morphTargetDictionary["Blinzeln"];
-          mesh.morphTargetInfluences[blinkIndex] = blinkValue;
+// ---- Manuelles Mund-Öffnen ----
+window.addEventListener("keydown", (event) => {
+  if (event.key.toLowerCase() === "m") {
+    manualMouthOpen = !manualMouthOpen;
+    if (manualMouthOpen) setMouthInfluence(1, "o");
+    else setMouthInfluence(0, "o");
+  }
+});
 
+// ---- Animate Loop ----
+function animate() {
+  requestAnimationFrame(animate);
+  if (mixer) mixer.update(0.016);
 
-        const mouthIndex = mesh.morphTargetDictionary["O_O"];
-          mesh.morphTargetInfluences[mouthIndex] = mouthOpen;
-        
-      });
-
-      renderer.render(scene, camera);
+  // Blinzeln
+  blinkTimer += 0.016;
+  if (!blinking && blinkTimer >= blinkInterval) {
+    blinking = true;
+    blinkTimer = 0;
+  }
+  let blinkValue = 0;
+  if (blinking) {
+    let progress = blinkTimer / blinkDuration;
+    if (progress < 1) blinkValue = progress;
+    else if (progress < 2) blinkValue = 2 - progress;
+    else {
+      blinkValue = 0;
+      blinking = false;
+      blinkTimer = 0;
+      blinkInterval = getRandomInterval();
     }
+  }
+  morphMeshes.forEach(mesh => {
+    const blinkIndex = mesh.morphTargetDictionary["Blinzeln"];
+    if (typeof blinkIndex !== "undefined") mesh.morphTargetInfluences[blinkIndex] = blinkValue;
+  });
 
-    init();
-    animate();
-  </script>
+  // Mundbewegungen (alle aktiven Morphs anwenden, außer manuell)
+  if (!manualMouthOpen) {
+    morphMeshes.forEach(mesh => {
+      Object.entries(activeMouthMorphs).forEach(([morphName, influence]) => {
+        const idx = mesh.morphTargetDictionary[morphName];
+        if (typeof idx !== "undefined") mesh.morphTargetInfluences[idx] = influence;
+      });
+    });
+  }
+
+  renderer.render(scene, camera);
+}
+
+init();
+animate();
+</script>
 </body>
 </html>
