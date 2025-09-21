@@ -6,6 +6,9 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 from PyQt5.QtCore import QUrl
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage, QWebEngineSettings
 
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+PORT = 8000
 
 class WebEnginePage(QWebEnginePage):
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
@@ -33,10 +36,18 @@ class PluginWidget(QMainWindow):
         page = WebEnginePage(self.browser)
         self.browser.setPage(page)
 
-        self.browser.setUrl(QUrl("http://localhost:63342/MultifunctionalToolbar/scripts/Assistant/viewerV2.html?_ijt"
-                                 "=nofrh9eoqr6kg2e48942flslqq&_ij_reload=RELOAD_ON_SAVE"))
-
+        #self.browser.setUrl(QUrl("http://localhost:63342/MultifunctionalToolbar/scripts/Assistant/viewerV2.html?_ijt"
+        #                         "=nofrh9eoqr6kg2e48942flslqq&_ij_reload=RELOAD_ON_SAVE"))
+        self.browser.setUrl(QUrl(f"http://localhost:{PORT}/viewerV2.html")) #http://localhost:8000/viewerV2.html
 if __name__ == "__main__":
+
+
+    Handler = SimpleHTTPRequestHandler
+
+    with ThreadingHTTPServer(("", PORT), Handler) as httpd:
+        print(f"Serving at http://localhost:{PORT}") # Spannenderweise funktioniert es nur über localhost
+        httpd.serve_forever()
+
     app = QApplication(sys.argv)
     window = PluginWidget()
     window.show()
