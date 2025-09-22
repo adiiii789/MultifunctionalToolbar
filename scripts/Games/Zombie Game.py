@@ -17,7 +17,8 @@ class PluginWidget(QMainWindow):
         self.setCentralWidget(central)
 
         # HTML UI (komplett eingebettet)
-        self.html = """<!DOCTYPE html>
+        if mode == "Window":
+            self.html = """<!DOCTYPE html>
 <html lang="de">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -598,6 +599,38 @@ boot(); startGame();
 
 })();
 </script>
+</body>
+</html>
+"""
+        elif mode == "Popup":
+            self.html = """<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plugin Hinweis</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #2E2E2E; /* dunkelgrau */
+            font-family: Arial, sans-serif;
+        }
+
+        h1 {
+            color: #FFFFFF; /* weiß */
+            font-weight: bold;
+            font-size: 2rem;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>Use this Plugin in the Main Window</h1>
 </body>
 </html>
 """
