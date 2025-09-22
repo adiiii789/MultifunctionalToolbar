@@ -897,8 +897,9 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
 
     def load_plugin_from_path(self, path: str, source_widget=None):
         try:
+            plugin_mode = "Popup" if isinstance(source_widget, PopupWindow) else "Window"
             if path.lower().endswith('.py'):
-                widget = self.load_python_plugin_widget(path)
+                widget = self.load_python_plugin_widget(path, mode=plugin_mode)
                 if widget is None:
                     QMessageBox.warning(source_widget or self, "Kein Plugin",
                                         f"{os.path.basename(path)} enthält keine Klasse 'PluginWidget'.")
@@ -932,15 +933,14 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         except Exception as e:
             QMessageBox.critical(source_widget or self, "Fehler beim Laden", f"{e}")
 
-    def load_python_plugin_widget(self, path: str):
-        global mode
+    def load_python_plugin_widget(self, path: str, mode="Window"):
         try:
             spec = importlib.util.spec_from_file_location("plugin_module", path)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             cls = getattr(mod, "PluginWidget", None)
             if cls is not None and isinstance(cls, type):
-                return cls(mode=mode)
+                return cls(mode=mode)  # jetzt korrekt übergeben
             return None
         except Exception:
             return None
