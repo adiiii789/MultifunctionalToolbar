@@ -32,7 +32,7 @@ QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
 
 # --- Globale Theme-Variable ---
 theme = "dark"
-
+mode = "Window"
 
 def is_dark():
     global theme
@@ -932,14 +932,15 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         except Exception as e:
             QMessageBox.critical(source_widget or self, "Fehler beim Laden", f"{e}")
 
-    def load_python_plugin_widget(self, path: str, mode="window"):
+    def load_python_plugin_widget(self, path: str):
+        global mode
         try:
             spec = importlib.util.spec_from_file_location("plugin_module", path)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             cls = getattr(mod, "PluginWidget", None)
             if cls is not None and isinstance(cls, type):
-                return cls()
+                return cls(mode=mode)
             return None
         except Exception:
             return None
@@ -959,10 +960,13 @@ class TrayApp(QApplication):
         self.tray.activated.connect(self.on_tray_activated)
 
     def on_tray_activated(self, reason):
+        global mode
         if reason == QSystemTrayIcon.Context:
+            mode = "Popup"
             self.popup.show_popup()
         elif reason == QSystemTrayIcon.Trigger:
             if self.main_window.isMinimized() or not self.main_window.isVisible():
+                mode = "Window"
                 self.main_window.showNormal()
                 self.main_window.activateWindow()
                 self.main_window.raise_()
