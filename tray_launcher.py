@@ -300,6 +300,30 @@ class ButtonContentMixin:
                             }}
                         """)
 
+    def update_scrollbar_theme(self):
+        if hasattr(self, "scroll_area") and self.scroll_area:
+            self.scroll_area.setStyleSheet(f"""
+                QScrollArea {{ background: transparent; }}
+                QScrollBar:vertical {{
+                    background: {'#292929' if is_dark() else '#ffffff'};
+                    width: 10px;
+                    margin: 0;
+                    border-radius: 5px;
+                }}
+                QScrollBar::handle:vertical {{
+                    background: #666;
+                    min-height: 20px;
+                    border-radius: 5px;
+                }}
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                    background: none;
+                    height: 0;
+                }}
+                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                    background: none;
+                }}
+            """)
+
 
 class HtmlPluginContainer(QWidget):
     def __init__(self, html_path: str):
@@ -367,26 +391,26 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QScrollArea.NoFrame)
-        self.scroll_area.setStyleSheet("""
-            QScrollArea { background: transparent; }
-            QScrollBar:vertical {
-                background: #292929;
+        self.scroll_area.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; }}
+            QScrollBar:vertical {{
+                background: {'#292929' if theme=="dark" else '#ffffff'};
                 width: 10px;
                 margin: 0;
                 border-radius: 5px;
-            }
-            QScrollBar::handle:vertical {
+            }}
+            QScrollBar::handle:vertical {{
                 background: #666;
                 min-height: 20px;
                 border-radius: 5px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
                 background: none;
                 height: 0;
-            }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
                 background: none;
-            }
+            }}
         """)
         self.scroll_area.setWidget(self.explorer_container)
         self.pages = QStackedWidget()
@@ -403,6 +427,29 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.animation = QPropertyAnimation(self, b"geometry")
         self.animation.setDuration(500)
         self.animation.setEasingCurve(QEasingCurve.OutCubic)
+
+    def update_scrollbar_theme(self):
+        self.scroll_area.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; }}
+            QScrollBar:vertical {{
+                background: {'#292929' if is_dark() else '#d6d6d6'};
+                width: 10px;
+                margin: 0;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {'#666' if is_dark() else '#999'};
+                min-height: 20px;
+                border-radius: 5px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                background: none;
+                height: 0;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+        """)
 
     def update_relative_size(self):
         screen = QGuiApplication.screenAt(QCursor.pos())
@@ -522,6 +569,7 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.html_toolbar.page().runJavaScript(js)
 
     def show_popup(self):
+        self.update_scrollbar_theme()
         self.add_buttons(self.layout)
         self.update_button_styles(self.layout)
         self._build_html_toolbar()
@@ -615,26 +663,26 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QScrollArea.NoFrame)
-        self.scroll_area.setStyleSheet("""
-            QScrollArea { background: transparent; }
-            QScrollBar:vertical {
-                background: #292929;
+        self.scroll_area.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; }}
+            QScrollBar:vertical {{
+                background: {'#292929' if theme=="dark" else '#ffffff'};
                 width: 10px;
                 margin: 0;
                 border-radius: 5px;
-            }
-            QScrollBar::handle:vertical {
+            }}
+            QScrollBar::handle:vertical {{
                 background: #666;
                 min-height: 20px;
                 border-radius: 5px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
                 background: none;
                 height: 0;
-            }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
                 background: none;
-            }
+            }}
         """)
         self.scroll_area.setWidget(self.button_container)
 
@@ -645,6 +693,29 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.init_button_state()
         self.add_buttons(self.layout)
         self.set_plugin_loader(self.load_plugin_from_path)
+
+    def update_scrollbar_theme(self):
+        self.scroll_area.setStyleSheet(f"""
+                    QScrollArea {{ background: transparent; }}
+                    QScrollBar:vertical {{
+                        background: {'#292929' if theme == "dark" else '#ffffff'};
+                        width: 10px;
+                        margin: 0;
+                        border-radius: 5px;
+                    }}
+                    QScrollBar::handle:vertical {{
+                        background: {'#666' if theme == "dark" else '#999'};
+                        min-height: 20px;
+                        border-radius: 5px;
+                    }}
+                    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                        background: none;
+                        height: 0;
+                    }}
+                    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                        background: none;
+                    }}
+                """)
 
     def update_relative_size(self):
         screen = QGuiApplication.screenAt(self.pos())
@@ -871,11 +942,17 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         global theme
         theme = "light" if is_dark() else "dark"
         set_theme(theme, self.app)
-        self.update_button_styles(self.layout)
-        if self.popup:
-            self.popup.update_button_styles(self.popup.layout)
 
-        # Den Explorer-Button im WebEngine nach Themewechsel neu updaten
+        # Scrollbar & Buttons im Hauptfenster aktualisieren
+        self.update_button_styles(self.layout)
+        self.update_scrollbar_theme()
+
+        # Wenn Popup sichtbar ist, auch dort aktualisieren
+        if self.popup and self.popup.isVisible():
+            self.popup.update_button_styles(self.popup.layout)
+            self.popup.update_scrollbar_theme()
+
+        # Toolbar-Button im WebEngine aktualisieren
         if WEBENGINE_AVAILABLE:
             js = f'window.setBtnMode && window.setBtnMode("{theme}");'
             try:
