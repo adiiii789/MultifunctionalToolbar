@@ -23,7 +23,8 @@ class PluginWidget(QMainWindow):
         self.browser.setFocus()  # wichtig für Tastatursteuerung
 
         # The HTML is embedded exactly as provided by you (no changes).
-        self.html = """<!DOCTYPE html>
+        if mode == "Window":
+            self.html = """<!DOCTYPE html>
 <html lang="de">
 <head>
 <meta charset="utf-8">
@@ -372,6 +373,121 @@ class PluginWidget(QMainWindow):
 </body>
 </html>"""
 
+        elif mode == "Popup":
+            self.html = """<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Snake – Fullscreen 8x15</title>
+<style>
+  :root{
+    --board:#0b1020; --grid:#1b2540;
+    --snake:#4cd964; --snake-head:#2ab84a; --food:#ff6b6b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0b0f1f;}
+  canvas{display:block;width:100%;height:100%;image-rendering:pixelated;}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script>
+(() => {
+  const cvs = document.getElementById('game');
+  const ctx = cvs.getContext('2d');
+
+  const COLS = 8, ROWS = 15;
+  let CELL = 40;
+  let tickBase = 200, tick = tickBase;
+  let runId = null, lastStep = 0;
+  let paused = false, gameOver = false;
+  let dir = {x:1,y:0}, nextDir = {x:1,y:0};
+  let snake = [], food = {x:0,y:0};
+  let score = 0;
+
+  const rnd = n => Math.floor(Math.random()*n);
+
+  function fitCanvas(){
+    const w = window.innerWidth, h = window.innerHeight;
+    CELL = Math.floor(Math.min(w/COLS, h/ROWS));
+    cvs.width = COLS * CELL;
+    cvs.height = ROWS * CELL;
+  }
+  window.addEventListener('resize', fitCanvas);
+  fitCanvas();
+
+  function newGame(){
+    gameOver=false; paused=false;
+    dir={x:1,y:0}; nextDir={x:1,y:0};
+    tick=tickBase; score=0;
+    const sx=Math.floor(COLS/3), sy=Math.floor(ROWS/2);
+    snake=[{x:sx,y:sy},{x:sx-1,y:sy},{x:sx-2,y:sy}];
+    placeFood();
+    stopLoop(); startLoop(); draw(true);
+  }
+
+  function placeFood(){
+    let x,y,occupied;
+    do{x=rnd(COLS); y=rnd(ROWS); occupied=snake.some(s=>s.x===x&&s.y===y);}while(occupied);
+    food.x=x; food.y=y;
+  }
+
+  function startLoop(){ lastStep=performance.now(); runId=requestAnimationFrame(loop); }
+  function stopLoop(){ if(runId) cancelAnimationFrame(runId); runId=null; }
+  function loop(now){ if(paused||gameOver){ runId=requestAnimationFrame(loop); return; }
+    if(now-lastStep>=tick){ step(); lastStep=now; } draw(); runId=requestAnimationFrame(loop);
+  }
+
+  function step(){
+    if((nextDir.x!==-dir.x)||(nextDir.y!==-dir.y)) dir=nextDir;
+    const head=snake[0], nx=head.x+dir.x, ny=head.y+dir.y;
+    if(nx<0||nx>=COLS||ny<0||ny>=ROWS) return die();
+    if(snake.some((s,i)=>i>0&&s.x===nx&&s.y===ny)) return die();
+    snake.unshift({x:nx,y:ny});
+    if(nx===food.x&&ny===food.y){ score++; tick=Math.max(50,tick*0.95); placeFood(); }
+    else snake.pop();
+  }
+
+  function die(){ gameOver=true; }
+
+  function draw(forceBg=false){
+    ctx.fillStyle='#0b1020';
+    ctx.fillRect(0,0,cvs.width,cvs.height);
+
+    ctx.strokeStyle='#1b2540'; ctx.lineWidth=1; ctx.beginPath();
+    for(let x=1;x<COLS;x++){ctx.moveTo(x*CELL+0.5,0); ctx.lineTo(x*CELL+0.5,cvs.height);}
+    for(let y=1;y<ROWS;y++){ctx.moveTo(0,y*CELL+0.5); ctx.lineTo(cvs.width,y*CELL+0.5);}
+    ctx.stroke();
+
+    drawCell(food.x,food.y,'#ff6b6b');
+    for(let i=snake.length-1;i>=0;i--){ const s=snake[i]; drawCell(s.x,s.y,i===0?'#2ab84a':'#4cd964'); if(i===0) drawEyes(s.x,s.y);}
+  }
+
+  function drawCell(x,y,color){ ctx.fillStyle=color; ctx.fillRect(x*CELL+1,y*CELL+1,CELL-2,CELL-2); }
+  function drawEyes(x,y){ const ex=dir.x*CELL*0.2, ey=dir.y*CELL*0.2; ctx.fillStyle='#0b0f1a'; ctx.beginPath(); ctx.arc(x*CELL+CELL*0.35+ex,y*CELL+CELL*0.3+ey,Math.max(2,CELL*0.1),0,2*Math.PI); ctx.fill(); ctx.beginPath(); ctx.arc(x*CELL+CELL*0.65+ex,y*CELL+CELL*0.3+ey,Math.max(2,CELL*0.1),0,2*Math.PI); ctx.fill(); }
+
+  window.addEventListener('keydown', e=>{
+    const k=e.key.toLowerCase();
+    if(k==='arrowup'||k==='w'){ next(0,-1); }
+    else if(k==='arrowdown'||k==='s'){ next(0,1); }
+    else if(k==='arrowleft'||k==='a'){ next(-1,0); }
+    else if(k==='arrowright'||k==='d'){ next(1,0); }
+    else if(k==='p'||k===' '){ togglePause(); }
+    else if(k==='r'){ resetGame(); }
+  },{passive:true});
+
+  function next(dx,dy){ nextDir={x:dx,y:dy}; }
+  function togglePause(){ if(gameOver)return; paused=!paused; }
+  function resetGame(){ newGame(); }
+
+  newGame();
+})();
+</script>
+</body>
+</html>
+"""
         # Load the HTML into the QWebEngineView
         self.browser.setHtml(self.html)
 

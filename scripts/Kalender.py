@@ -1,6 +1,7 @@
 # scripts/pro_calendar_html.py
 import os
 import json
+import sys
 from datetime import datetime, date, timedelta, time
 from pathlib import Path
 
@@ -10,12 +11,11 @@ from icalendar import Calendar
 
 from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QEvent
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QFileDialog, QListWidget, QListWidgetItem, QLabel, QAbstractItemView,
     QSizePolicy
 )
 from PyQt5.QtWebEngineWidgets import QWebEngineView
-
 
 # ===========================
 # Konfiguration / Farben
@@ -26,7 +26,6 @@ PALETTE = [
     "#ff79c6", "#c792ea", "#ffd54f", "#81c784", "#64b5f6"
 ]
 LOCAL_TZ = timezone("Europe/Berlin")  # Lokale TZ für Normalisierung
-
 
 # ===========================
 # Pfade / Config
@@ -47,7 +46,6 @@ def load_config() -> list:
     if p.exists():
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-            # zu absolute Pfade normalisieren (falls relativ gespeichert)
             norm_paths = []
             for path in data:
                 full_path = Path(path)
@@ -70,27 +68,25 @@ def save_config(paths: list):
 # ===========================
 def ensure_datetime(x):
     """
-    Normalisiert date/datetime aus ICS zu naiver lokaler datetime (ohne tzinfo).
-    - Ganztagstermin (date) -> 00:00 lokale Zeit
-    - Aware datetime -> in lokale TZ wandeln, tzinfo entfernen
-    - Naive datetime -> übernehmen
+    Normalize ICS date/datetime values to naive local datetimes (no tzinfo).
+    - date -> combine with 00:00 local
+    - aware datetime -> convert to LOCAL_TZ and drop tzinfo
+    - naive datetime -> keep as is
     """
     if isinstance(x, date) and not isinstance(x, datetime):
         return datetime.combine(x, time.min)
-
     if isinstance(x, datetime):
         if x.tzinfo is None:
             return x
         dt_local = x.astimezone(LOCAL_TZ)
         return dt_local.replace(tzinfo=None)
-
     return x
 
 
 def current_week_range(today: date = None):
     if today is None:
         today = date.today()
-    monday = today - timedelta(days=today.weekday())  # Montag als 0
+    monday = today - timedelta(days=today.weekday())
     sunday = monday + timedelta(days=6)
     return monday, sunday
 
@@ -180,7 +176,7 @@ class PluginWidget(QMainWindow):
         super().__init__()
         self.setWindowTitle("📅 Kalender")
         self.resize(1100, 740)
-
+        self.mode = mode  # "Window" or "Popup"
         self.ics_files = load_config()
 
         # --- Layout Grundgerüst ---
@@ -190,82 +186,88 @@ class PluginWidget(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Toolbar
-        bar = QWidget()
-        bar_l = QHBoxLayout(bar)
-        bar_l.setContentsMargins(12, 10, 12, 10)
-        bar_l.setSpacing(10)
+        # Toolbar + lists only for Window mode
+        if self.mode == "Window":
+            bar = QWidget()
+            bar_l = QHBoxLayout(bar)
+            bar_l.setContentsMargins(12, 10, 12, 10)
+            bar_l.setSpacing(10)
 
-        self.btn_add = QPushButton("ICS hinzufügen")
-        self.btn_remove = QPushButton("Entfernen")
-        self.btn_week = QPushButton("Woche")
-        self.btn_2weeks = QPushButton("2 Wochen")
-        self.btn_month = QPushButton("Monat")
-        self.btn_day = QPushButton("Heute (kompakt)")
-        self.title_label = QLabel(" ")
-        self.title_label.setStyleSheet("color:#aaa;")
+            self.btn_add = QPushButton("ICS hinzufügen")
+            self.btn_remove = QPushButton("Entfernen")
+            self.btn_week = QPushButton("Woche")
+            self.btn_2weeks = QPushButton("2 Wochen")
+            self.btn_month = QPushButton("Monat")
+            self.btn_day = QPushButton("Heute (kompakt)")
+            self.title_label = QLabel(" ")
+            self.title_label.setStyleSheet("color:#aaa;")
 
-        bar_l.addWidget(self.btn_add)
-        bar_l.addWidget(self.btn_remove)
-        bar_l.addStretch(1)
-        bar_l.addWidget(self.btn_day)
-        bar_l.addWidget(self.btn_week)
-        bar_l.addWidget(self.btn_2weeks)
-        bar_l.addWidget(self.btn_month)
-        bar_l.addStretch(1)
-        bar_l.addWidget(self.title_label)
+            bar_l.addWidget(self.btn_add)
+            bar_l.addWidget(self.btn_remove)
+            bar_l.addStretch(1)
+            bar_l.addWidget(self.btn_day)
+            bar_l.addWidget(self.btn_week)
+            bar_l.addWidget(self.btn_2weeks)
+            bar_l.addWidget(self.btn_month)
+            bar_l.addStretch(1)
+            bar_l.addWidget(self.title_label)
 
-        # Kalenderlisten
-        self.list_widget = DropListWidget()
-        self.list_widget.setMaximumHeight(140)
-        self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+            # two calendar lists: one general, one for compact day view selection
+            self.list_widget = DropListWidget()
+            self.list_widget.setMaximumHeight(140)
+            self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
 
-        self.list_widget_day = DropListWidget()
-        self.list_widget_day.setMaximumHeight(140)
-        self.list_widget_day.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
-        self.list_widget_day.setVisible(False)
+            self.list_widget_day = DropListWidget()
+            self.list_widget_day.setMaximumHeight(140)
+            self.list_widget_day.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+            self.list_widget_day.setVisible(False)
 
-        # WebView
+            bar.setStyleSheet("""
+                QWidget { background:#111318; }
+                QPushButton {
+                    background:#263238; color:#e6e6e6; border:none; padding:8px 12px; border-radius:10px;
+                    font-weight: 600;
+                }
+                QPushButton:hover { background:#37474f; }
+                QListWidget { background:#0f1115; color:#ddd; border-top:1px solid #1f2430; border-bottom:1px solid #1f2430; }
+            """)
+
+            root.addWidget(bar)
+            root.addWidget(self.list_widget)
+            root.addWidget(self.list_widget_day)
+
+            # connect events
+            self.btn_add.clicked.connect(self.add_ics_dialog)
+            self.btn_remove.clicked.connect(self.remove_selected)
+            self.btn_week.clicked.connect(lambda: self.render(mode="week"))
+            self.btn_2weeks.clicked.connect(lambda: self.render(mode="two_weeks"))
+            self.btn_month.clicked.connect(lambda: self.render(mode="month"))
+            self.btn_day.clicked.connect(lambda: self.render(mode="day"))
+
+            self.list_widget.itemChanged.connect(lambda _: self.render())
+            self.list_widget_day.itemChanged.connect(lambda _: self.render("day"))
+
+            self.list_widget.filesDropped.connect(self.add_ics_paths)
+            self.list_widget_day.filesDropped.connect(self.add_ics_paths)
+
+        # WebView (always)
         self.web = QWebEngineView()
         self.web.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        # Styling
-        bar.setStyleSheet("""
-            QWidget { background:#111318; }
-            QPushButton {
-                background:#263238; color:#e6e6e6; border:none; padding:8px 12px; border-radius:10px;
-                font-weight: 600;
-            }
-            QPushButton:hover { background:#37474f; }
-            QListWidget { background:#0f1115; color:#ddd; border-top:1px solid #1f2430; border-bottom:1px solid #1f2430; }
-        """)
-
-        root.addWidget(bar)
-        root.addWidget(self.list_widget)
-        root.addWidget(self.list_widget_day)
         root.addWidget(self.web, 1)
 
-        # Events
-        self.btn_add.clicked.connect(self.add_ics_dialog)
-        self.btn_remove.clicked.connect(self.remove_selected)
-        self.btn_week.clicked.connect(lambda: self.render(mode="week"))
-        self.btn_2weeks.clicked.connect(lambda: self.render(mode="two_weeks"))
-        self.btn_month.clicked.connect(lambda: self.render(mode="month"))
-        self.btn_day.clicked.connect(lambda: self.render(mode="day"))
-
-        self.list_widget.itemChanged.connect(lambda _: self.render())
-        self.list_widget_day.itemChanged.connect(lambda _: self.render("day"))
-
-        self.list_widget.filesDropped.connect(self.add_ics_paths)
-        self.list_widget_day.filesDropped.connect(self.add_ics_paths)
-
         # Initial
-        self._refresh_calendar_list()
-        self._refresh_calendar_list_day()
-        self.render(mode="week")
+        if self.mode == "Window":
+            self._refresh_calendar_list()
+            self._refresh_calendar_list_day()
+            self.render(mode="week")
+        else:
+            # popup -> directly day compact
+            self.render(mode="day")
 
     # ---- Kalenderlisten ----
     def _refresh_calendar_list_day(self):
+        if self.mode != "Window":
+            return
         self.list_widget_day.clear()
         for path in self.ics_files:
             full = Path(path)
@@ -280,6 +282,8 @@ class PluginWidget(QMainWindow):
             self.list_widget_day.addItem(item)
 
     def _refresh_calendar_list(self):
+        if self.mode != "Window":
+            return
         self.list_widget.clear()
         for path in self.ics_files:
             full = Path(path)
@@ -302,8 +306,9 @@ class PluginWidget(QMainWindow):
                 changed = True
         if changed:
             save_config(self.ics_files)
-            self._refresh_calendar_list()
-            self._refresh_calendar_list_day()
+            if self.mode == "Window":
+                self._refresh_calendar_list()
+                self._refresh_calendar_list_day()
             self.render()
 
     def add_ics_dialog(self):
@@ -312,6 +317,8 @@ class PluginWidget(QMainWindow):
             self.add_ics_paths(paths)
 
     def remove_selected(self):
+        if self.mode != "Window":
+            return
         selected = self.list_widget.selectedItems()
         if not selected:
             return
@@ -323,6 +330,8 @@ class PluginWidget(QMainWindow):
         self.render()
 
     def _active_calendars(self):
+        if self.mode != "Window":
+            return self.ics_files
         act = []
         for i in range(self.list_widget.count()):
             it = self.list_widget.item(i)
@@ -331,6 +340,8 @@ class PluginWidget(QMainWindow):
         return act
 
     def _active_calendars_day(self):
+        if self.mode != "Window":
+            return self.ics_files
         act = []
         for i in range(self.list_widget_day.count()):
             it = self.list_widget_day.item(i)
@@ -339,12 +350,12 @@ class PluginWidget(QMainWindow):
         return act
 
     # ===========================
-    # ICS laden / expandieren
+    # ICS laden / expandieren (inkl. RRULE/RDATE/EXDATE + overrides)
     # ===========================
     def load_events(self, active_paths=None):
         evs = []
         now = datetime.now()
-        # großes Fenster, damit Recurrences sauber expandieren
+        # big window so recurrences expand reliably
         window_start = now - timedelta(days=730)
         window_end = now + timedelta(days=730)
 
@@ -367,7 +378,8 @@ class PluginWidget(QMainWindow):
                     rec_id = comp.get("RECURRENCE-ID")
 
                     if rec_id:
-                        rid_dt = ensure_datetime(rec_id.dt)
+                        # recurrence-id overrides
+                        rid_dt = ensure_datetime(getattr(rec_id, "dt", rec_id))
                         overrides[(uid, rid_dt)] = comp
                     else:
                         masters.append(comp)
@@ -378,11 +390,11 @@ class PluginWidget(QMainWindow):
                     if not dtstart_prop:
                         continue
 
-                    start_base = ensure_datetime(dtstart_prop.dt)
+                    start_base = ensure_datetime(getattr(dtstart_prop, "dt", dtstart_prop))
 
                     end_prop = comp.get("DTEND")
                     if end_prop is not None:
-                        end_base = ensure_datetime(end_prop.dt)
+                        end_base = ensure_datetime(getattr(end_prop, "dt", end_prop))
                     else:
                         dur_prop = comp.get("DURATION")
                         if dur_prop:
@@ -397,7 +409,7 @@ class PluginWidget(QMainWindow):
                     duration = max(end_base - start_base, timedelta(minutes=1))
 
                     summary_base = str(comp.get("SUMMARY") or "Termin")
-                    all_day_base = isinstance(dtstart_prop.dt, date) and not isinstance(dtstart_prop.dt, datetime)
+                    all_day_base = isinstance(getattr(dtstart_prop, "dt", dtstart_prop), date) and not isinstance(getattr(dtstart_prop, "dt", dtstart_prop), datetime)
 
                     rrule_prop = comp.get("RRULE")
                     rdate_props = comp.get("RDATE")
@@ -408,6 +420,7 @@ class PluginWidget(QMainWindow):
                     if has_recur:
                         rset = rruleset()
 
+                        # RRULE
                         if rrule_prop:
                             try:
                                 rule_bytes = rrule_prop.to_ical() if hasattr(rrule_prop, "to_ical") else None
@@ -419,6 +432,7 @@ class PluginWidget(QMainWindow):
                             except Exception:
                                 pass
 
+                        # RDATE
                         if rdate_props:
                             rdate_list = rdate_props if isinstance(rdate_props, list) else [rdate_props]
                             for rdp in rdate_list:
@@ -426,10 +440,11 @@ class PluginWidget(QMainWindow):
                                 if dts:
                                     for d in dts:
                                         try:
-                                            rset.rdate(ensure_datetime(d.dt))
+                                            rset.rdate(ensure_datetime(getattr(d, "dt", d)))
                                         except Exception:
                                             pass
 
+                        # EXDATE
                         if exdate_props:
                             exdate_list = exdate_props if isinstance(exdate_props, list) else [exdate_props]
                             for edp in exdate_list:
@@ -437,7 +452,7 @@ class PluginWidget(QMainWindow):
                                 if dts:
                                     for d in dts:
                                         try:
-                                            rset.exdate(ensure_datetime(d.dt))
+                                            rset.exdate(ensure_datetime(getattr(d, "dt", d)))
                                         except Exception:
                                             pass
 
@@ -451,14 +466,15 @@ class PluginWidget(QMainWindow):
                             if ov:
                                 o_dtstart_prop = ov.get("DTSTART")
                                 o_dtend_prop = ov.get("DTEND")
-                                o_start = ensure_datetime(o_dtstart_prop.dt) if o_dtstart_prop else occ_start
+                                o_start = ensure_datetime(getattr(o_dtstart_prop, "dt", o_dtstart_prop)) if o_dtstart_prop else occ_start
                                 if o_dtend_prop:
-                                    o_end = ensure_datetime(o_dtend_prop.dt)
+                                    o_end = ensure_datetime(getattr(o_dtend_prop, "dt", o_dtend_prop))
                                 else:
                                     o_end = o_start + duration
                                 o_summary = str(ov.get("SUMMARY") or summary_base)
                                 o_all_day = (
-                                    isinstance(o_dtstart_prop.dt, date) and not isinstance(o_dtstart_prop.dt, datetime)
+                                    isinstance(getattr(o_dtstart_prop, "dt", o_dtstart_prop), date) and
+                                    not isinstance(getattr(o_dtstart_prop, "dt", o_dtstart_prop), datetime)
                                 ) if o_dtstart_prop else all_day_base
                                 if o_end <= o_start:
                                     o_end = o_start + timedelta(minutes=60)
@@ -486,6 +502,7 @@ class PluginWidget(QMainWindow):
                                     "path": path
                                 })
                     else:
+                        # single (non-recurrent) event
                         if end_base <= start_base:
                             end_base = start_base + timedelta(minutes=60)
                         evs.append({
@@ -499,6 +516,7 @@ class PluginWidget(QMainWindow):
                         })
 
             except Exception:
+                # skip broken calendars but continue
                 continue
 
         evs.sort(key=lambda e: (e["start"], e["end"]))
@@ -513,13 +531,12 @@ class PluginWidget(QMainWindow):
         self._last_mode = mode
 
         if mode == "day":
-            # Kompakte Tagesansicht: kein Scrollen, alle Karten gleich groß
-            self.list_widget.setVisible(False)
-            self.list_widget_day.setVisible(True)
-
-            today_date = date.today()
+            # compact day view
+            if self.mode == "Window":
+                self.list_widget.setVisible(False)
+                self.list_widget_day.setVisible(True)
             all_events = self.load_events(active_paths=self._active_calendars_day())
-
+            today_date = date.today()
             todays = []
             for ev in all_events:
                 s = datetime.fromisoformat(ev["start"])
@@ -527,45 +544,44 @@ class PluginWidget(QMainWindow):
                 if s.date() <= today_date <= e.date():
                     todays.append(ev)
 
-            # sortiert (all-day zuerst, dann nach Startzeit)
+            # sort: all-day first, then by start time
             def _key(ev):
                 s = datetime.fromisoformat(ev["start"])
                 return (0 if ev.get("allDay") else 1, s.time())
             todays.sort(key=_key)
 
-            self.title_label.setText(today_date.strftime("Heute (kompakt) · %A, %d.%m.%Y"))
             html = self._build_day_compact_html(todays, today_date)
             self.web.setHtml(html, baseUrl=QUrl.fromLocalFile(str(_script_dir())))
             return
 
-        # Wochen/2Wochen/Monat
-        self.list_widget.setVisible(True)
-        self.list_widget_day.setVisible(False)
+        # non-day: week/2-weeks/month
+        if self.mode == "Window":
+            self.list_widget.setVisible(True)
+            self.list_widget_day.setVisible(False)
 
-        events = self.load_events()
+            events = self.load_events()
+            if mode == "week":
+                mo, su = current_week_range()
+                self.title_label.setText(f"Aktuelle Woche · {mo.strftime('%d.%m.%Y')} – {su.strftime('%d.%m.%Y')}")
+            elif mode == "two_weeks":
+                mo, su = current_week_range()
+                nmo, nsu = next_week_range()
+                self.title_label.setText(
+                    f"Woche + nächste · {mo.strftime('%d.%m')}–{su.strftime('%d.%m')} & {nmo.strftime('%d.%m')}–{nsu.strftime('%d.%m')}"
+                )
+            else:
+                today = date.today()
+                self.title_label.setText(today.strftime("Monat · %B %Y"))
 
-        if mode == "week":
-            mo, su = current_week_range()
-            self.title_label.setText(f"Aktuelle Woche · {mo.strftime('%d.%m.%Y')} – {su.strftime('%d.%m.%Y')}")
-        elif mode == "two_weeks":
-            mo, su = current_week_range()
-            nmo, nsu = next_week_range()
-            self.title_label.setText(
-                f"Woche + nächste · {mo.strftime('%d.%m')}–{su.strftime('%d.%m')} & {nmo.strftime('%d.%m')}–{nsu.strftime('%d.%m')}"
-            )
-        else:
-            today = date.today()
-            self.title_label.setText(today.strftime("Monat · %B %Y"))
-
-        html = self._build_html(events, mode)
-        self.web.setHtml(html, baseUrl=QUrl.fromLocalFile(str(_script_dir())))
+            html = self._build_html(events, mode)
+            self.web.setHtml(html, baseUrl=QUrl.fromLocalFile(str(_script_dir())))
 
     # ---- HTML für Woche/2 Wochen/Monat ----
     def _build_html(self, events, mode):
         events_json = json.dumps(events, ensure_ascii=False)
         today_iso = date.today().isoformat()
 
-        html = HTML_TEMPLATE
+        html = WINDOW_HTML_TEMPLATE
         html = html.replace("__EVENTS__", events_json)
         html = html.replace("__MODE__", mode)
         html = html.replace("__TODAY__", today_iso)
@@ -573,188 +589,34 @@ class PluginWidget(QMainWindow):
 
     # ---- Kompakte Tagesansicht (keine Scrollbars) ----
     def _build_day_compact_html(self, events, today_date: date):
-        today_label = today_date.strftime("%A, %d.%m.%Y")
-
-        # Erzeuge das JavaScript-Array aus Events inklusive allDay-Flag
+        # Create JS event list with start/end hours and minutes and allDay flag
         js_events = []
         for ev in events:
             start_dt = datetime.fromisoformat(ev["start"])
             end_dt = datetime.fromisoformat(ev["end"])
             if end_dt <= start_dt:
                 end_dt = start_dt + timedelta(hours=1)
-
             js_events.append({
                 "startH": start_dt.hour,
                 "startM": start_dt.minute,
                 "endH": end_dt.hour,
                 "endM": end_dt.minute,
                 "title": ev["title"],
-                "color": ev["color"],
+                "color": ev.get("color", "#3a82f6"),
                 "allDay": ev.get("allDay", False),
             })
 
         events_json = json.dumps(js_events, ensure_ascii=False)
 
-        html = f"""<!DOCTYPE html>
-    <html lang="de">
-    <head>
-      <meta charset="UTF-8">
-      <title>Tagesansicht</title>
-      <style>
-        body {{
-          font-family: Arial, sans-serif;
-          margin: 0;
-          padding: 0;
-          height: 100vh;
-          display: flex;
-          flex-direction: column;
-          background: #1e1e1e;
-          color: #ddd;
-        }}
-
-        .day-view {{
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-        }}
-
-        .all-day {{
-          border-bottom: 1px solid #333;
-          padding: 6px;
-          background: #2a2a2a;
-          min-height: 40px;
-        }}
-        .all-day-event {{
-          display: inline-block;
-          background: #3a82f6;
-          color: white;
-          padding: 2px 6px;
-          margin: 2px;
-          border-radius: 4px;
-          font-size: 12px;
-        }}
-
-        .hours {{
-          flex: 1;
-          position: relative;
-          display: flex;
-          flex-direction: column;
-        }}
-        .hour {{
-          border-top: 1px solid #333;
-          flex: 1;
-          position: relative;
-        }}
-        .hour-label {{
-          position: absolute;
-          left: 0;
-          top: 0;
-          width: 50px;
-          text-align: right;
-          font-size: 11px;
-          color: #aaa;
-          padding-right: 5px;
-        }}
-
-        .event {{
-          position: absolute;
-          left: 60px;
-          right: 10px;
-          background: #7ed321;
-          border-radius: 4px;
-          padding: 4px;
-          color: #fff;
-          font-size: 12px;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.4);
-          overflow: hidden;
-        }}
-      </style>
-    </head>
-    <body>
-      <div class="day-view">
-        <div class="all-day" id="allDayEvents"></div>
-        <div class="hours" id="hours">
-          <div class="hour"><div class="hour-label">00:00</div></div>
-          <div class="hour"><div class="hour-label">01:00</div></div>
-          <div class="hour"><div class="hour-label">02:00</div></div>
-          <div class="hour"><div class="hour-label">03:00</div></div>
-          <div class="hour"><div class="hour-label">04:00</div></div>
-          <div class="hour"><div class="hour-label">05:00</div></div>
-          <div class="hour"><div class="hour-label">06:00</div></div>
-          <div class="hour"><div class="hour-label">07:00</div></div>
-          <div class="hour"><div class="hour-label">08:00</div></div>
-          <div class="hour"><div class="hour-label">09:00</div></div>
-          <div class="hour"><div class="hour-label">10:00</div></div>
-          <div class="hour"><div class="hour-label">11:00</div></div>
-          <div class="hour"><div class="hour-label">12:00</div></div>
-          <div class="hour"><div class="hour-label">13:00</div></div>
-          <div class="hour"><div class="hour-label">14:00</div></div>
-          <div class="hour"><div class="hour-label">15:00</div></div>
-          <div class="hour"><div class="hour-label">16:00</div></div>
-          <div class="hour"><div class="hour-label">17:00</div></div>
-          <div class="hour"><div class="hour-label">18:00</div></div>
-          <div class="hour"><div class="hour-label">19:00</div></div>
-          <div class="hour"><div class="hour-label">20:00</div></div>
-          <div class="hour"><div class="hour-label">21:00</div></div>
-          <div class="hour"><div class="hour-label">22:00</div></div>
-          <div class="hour"><div class="hour-label">23:00</div></div>
-        </div>
-      </div>
-
-      <script>
-        const events = {events_json};
-
-        function renderEvents() {{
-          const hoursDiv = document.getElementById("hours");
-          const allDayDiv = document.getElementById("allDayEvents");
-          const totalMinutes = 24 * 60;
-          const hourHeight = hoursDiv.clientHeight;
-          const pxPerMinute = hourHeight / totalMinutes;
-
-          // Alle alten Events entfernen
-          [...document.querySelectorAll(".event")].forEach(e => e.remove());
-          allDayDiv.innerHTML = "";
-
-          events.forEach(ev => {{
-            if(ev.allDay) {{
-              const span = document.createElement("span");
-              span.className = "all-day-event";
-              span.textContent = ev.title;
-              allDayDiv.appendChild(span);
-            }} else {{
-              const start = ev.startH * 60 + ev.startM;
-              const end = ev.endH * 60 + ev.endM;
-
-              const top = start * pxPerMinute;
-              const height = (end - start) * pxPerMinute;
-
-              const div = document.createElement("div");
-              div.className = "event";
-              div.style.top = top + "px";
-              div.style.height = height + "px";
-              div.style.background = ev.color;
-              div.innerHTML = ev.title + "<br>" +
-                              String(ev.startH).padStart(2,"0") + ":" + String(ev.startM).padStart(2,"0") +
-                              " - " +
-                              String(ev.endH).padStart(2,"0") + ":" + String(ev.endM).padStart(2,"0");
-              hoursDiv.appendChild(div);
-            }}
-          }});
-        }}
-
-        window.addEventListener("resize", renderEvents);
-        window.addEventListener("load", renderEvents);
-      </script>
-    </body>
-    </html>"""
-
+        html = DAY_HTML_TEMPLATE
+        html = html.replace("__EVENTS__", events_json)
         return html
 
 
 # ===========================
-# HTML-Template (Woche/2W/Monat)
+# HTML-Templates (Window + Day)
 # ===========================
-HTML_TEMPLATE = r"""<!DOCTYPE html>
+WINDOW_HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
@@ -945,7 +807,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     container.style.gridTemplateRows = "repeat(6, 1fr)";
 
     const first = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-    const start = startOfWeekMonday(first); // sichert, dass wir Mo starten
+    const start = startOfWeekMonday(first); // ensure Monday start
 
     for(let i=0;i<42;i++){
       const d0 = new Date(start);
@@ -1028,3 +890,173 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </body>
 </html>
 """
+
+DAY_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Tagesansicht</title>
+  <style>
+    html, body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: #1e1e1e;
+      color: #ddd;
+    }
+
+    .day-view {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .all-day {
+      border-bottom: 1px solid #333;
+      padding: 0px;
+      background: #2a2a2a;
+      min-height: 0px;
+    }
+    .all-day-event {
+      display: inline-block;
+      background: #3a82f6;
+      color: white;
+      padding: 2px 6px;
+      margin: 2px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+
+    .hours {
+      flex: 1;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 80px);
+    }
+    .hour {
+      border-top: 1px solid #333;
+      flex: 1;
+      position: relative;
+    }
+    .hour-label {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 50px;
+      text-align: right;
+      font-size: 11px;
+      color: #aaa;
+      padding-right: 5px;
+    }
+
+    .event {
+      position: absolute;
+      left: 60px;
+      right: 10px;
+      background: #7ed321;
+      border-radius: 4px;
+      padding: 4px;
+      color: #fff;
+      font-size: 12px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div class="day-view">
+    <div class="all-day" id="allDayEvents"></div>
+    <div class="hours" id="hours">
+      <div class="hour"><div class="hour-label">00:00</div></div>
+      <div class="hour"><div class="hour-label">01:00</div></div>
+      <div class="hour"><div class="hour-label">02:00</div></div>
+      <div class="hour"><div class="hour-label">03:00</div></div>
+      <div class="hour"><div class="hour-label">04:00</div></div>
+      <div class="hour"><div class="hour-label">05:00</div></div>
+      <div class="hour"><div class="hour-label">06:00</div></div>
+      <div class="hour"><div class="hour-label">07:00</div></div>
+      <div class="hour"><div class="hour-label">08:00</div></div>
+      <div class="hour"><div class="hour-label">09:00</div></div>
+      <div class="hour"><div class="hour-label">10:00</div></div>
+      <div class="hour"><div class="hour-label">11:00</div></div>
+      <div class="hour"><div class="hour-label">12:00</div></div>
+      <div class="hour"><div class="hour-label">13:00</div></div>
+      <div class="hour"><div class="hour-label">14:00</div></div>
+      <div class="hour"><div class="hour-label">15:00</div></div>
+      <div class="hour"><div class="hour-label">16:00</div></div>
+      <div class="hour"><div class="hour-label">17:00</div></div>
+      <div class="hour"><div class="hour-label">18:00</div></div>
+      <div class="hour"><div class="hour-label">19:00</div></div>
+      <div class="hour"><div class="hour-label">20:00</div></div>
+      <div class="hour"><div class="hour-label">21:00</div></div>
+      <div class="hour"><div class="hour-label">22:00</div></div>
+      <div class="hour"><div class="hour-label">23:00</div></div>
+    </div>
+  </div>
+
+  <script>
+    const events = __EVENTS__;
+
+    function renderEvents() {
+      const hoursDiv = document.getElementById("hours");
+      const allDayDiv = document.getElementById("allDayEvents");
+      const totalMinutes = 24 * 60;
+      const hourHeight = hoursDiv.clientHeight || (window.innerHeight - 80);
+      const pxPerMinute = hourHeight / totalMinutes;
+
+      // remove old events
+      [...document.querySelectorAll(".event")].forEach(e => e.remove());
+      allDayDiv.innerHTML = "";
+
+      events.forEach(ev => {
+        if(ev.allDay) {
+          const span = document.createElement("span");
+          span.className = "all-day-event";
+          span.textContent = ev.title;
+          allDayDiv.appendChild(span);
+        } else {
+          const start = ev.startH * 60 + ev.startM;
+          const end = ev.endH * 60 + ev.endM;
+
+          const top = start * pxPerMinute;
+          const height = Math.max((end - start) * pxPerMinute, 18);
+
+          const div = document.createElement("div");
+          div.className = "event";
+          div.style.top = top + "px";
+          div.style.height = height + "px";
+          div.style.background = ev.color;
+          div.innerHTML = ev.title + "<br>" +
+                          String(ev.startH).padStart(2,"0") + ":" + String(ev.startM).padStart(2,"0") +
+                          " - " +
+                          String(ev.endH).padStart(2,"0") + ":" + String(ev.endM).padStart(2,"0");
+          hoursDiv.appendChild(div);
+        }
+      });
+    }
+
+    window.addEventListener("resize", renderEvents);
+    window.addEventListener("load", renderEvents);
+    // call after a short delay in case webview sizing isn't immediate
+    setTimeout(renderEvents, 120);
+  </script>
+</body>
+</html>
+"""
+
+# ===========================
+# Programmstart
+# ===========================
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    # optional: pass "Popup" as first arg to start popup mode
+    mode = "Window"
+    if len(sys.argv) > 1 and sys.argv[1].lower() in ("popup", "--popup", "-popup"):
+        mode = "Popup"
+    w = PluginWidget(mode=mode)
+    w.show()
+    sys.exit(app.exec_())

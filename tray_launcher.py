@@ -7,7 +7,7 @@ from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QSystemTrayIcon, QMainWindow, QSizePolicy, QHBoxLayout, QLabel,
-    QStackedWidget, QMessageBox, QScrollArea
+    QStackedWidget, QMessageBox, QScrollArea, QLineEdit, QSpacerItem
 )
 from PyQt5.QtGui import QCursor, QIcon, QColor, QGuiApplication
 from PyQt5.QtCore import (
@@ -32,7 +32,7 @@ QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
 
 # --- Globale Theme-Variable ---
 theme = "dark"
-
+mode = "Window"
 
 def is_dark():
     global theme
@@ -300,6 +300,30 @@ class ButtonContentMixin:
                             }}
                         """)
 
+    def update_scrollbar_theme(self):
+        if hasattr(self, "scroll_area") and self.scroll_area:
+            self.scroll_area.setStyleSheet(f"""
+                QScrollArea {{ background: transparent; }}
+                QScrollBar:vertical {{
+                    background: {'#292929' if is_dark() else '#ffffff'};
+                    width: 10px;
+                    margin: 0;
+                    border-radius: 5px;
+                }}
+                QScrollBar::handle:vertical {{
+                    background: #666;
+                    min-height: 20px;
+                    border-radius: 5px;
+                }}
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                    background: none;
+                    height: 0;
+                }}
+                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                    background: none;
+                }}
+            """)
+
 
 class HtmlPluginContainer(QWidget):
     def __init__(self, html_path: str):
@@ -367,26 +391,26 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QScrollArea.NoFrame)
-        self.scroll_area.setStyleSheet("""
-            QScrollArea { background: transparent; }
-            QScrollBar:vertical {
-                background: #292929;
+        self.scroll_area.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; }}
+            QScrollBar:vertical {{
+                background: {'#292929' if theme=="dark" else '#ffffff'};
                 width: 10px;
                 margin: 0;
                 border-radius: 5px;
-            }
-            QScrollBar::handle:vertical {
+            }}
+            QScrollBar::handle:vertical {{
                 background: #666;
                 min-height: 20px;
                 border-radius: 5px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
                 background: none;
                 height: 0;
-            }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
                 background: none;
-            }
+            }}
         """)
         self.scroll_area.setWidget(self.explorer_container)
         self.pages = QStackedWidget()
@@ -403,6 +427,29 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.animation = QPropertyAnimation(self, b"geometry")
         self.animation.setDuration(500)
         self.animation.setEasingCurve(QEasingCurve.OutCubic)
+
+    def update_scrollbar_theme(self):
+        self.scroll_area.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; }}
+            QScrollBar:vertical {{
+                background: {'#292929' if is_dark() else '#d6d6d6'};
+                width: 10px;
+                margin: 0;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {'#666' if is_dark() else '#999'};
+                min-height: 20px;
+                border-radius: 5px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                background: none;
+                height: 0;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+        """)
 
     def update_relative_size(self):
         screen = QGuiApplication.screenAt(QCursor.pos())
@@ -522,6 +569,7 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.html_toolbar.page().runJavaScript(js)
 
     def show_popup(self):
+        self.update_scrollbar_theme()
         self.add_buttons(self.layout)
         self.update_button_styles(self.layout)
         self._build_html_toolbar()
@@ -561,7 +609,6 @@ class ThemeBridge(QObject):
         elif self.main_window:
             self.main_window.go_back_to_explorer()
 
-
 class MainAppWindow(QMainWindow, ButtonContentMixin):
     def __init__(self, app, popup=None):
         super().__init__()
@@ -583,6 +630,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                 self.html_toolbar.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
             except Exception:
                 pass
+
         self.show_explorer_btn = False
         self._build_html_toolbar()
         if WEBENGINE_AVAILABLE:
@@ -598,8 +646,38 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             self.html_toolbar.setFixedHeight(44)
             self.html_toolbar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
+        # --- Suchfeld (oben rechts) ---
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search plugins...")
+        self.search_input.setFixedHeight(max(28, int(self.height_size * 0.08)))
+        self.search_input.setFixedWidth(220)      # FIXED WIDTH OF SEARCH BAR
+        self.search_input.setStyleSheet(f"""
+            QLineEdit {{
+                background: {'#292929' if is_dark() else '#ffffff'};
+                color: {'#ffffff' if is_dark() else '#3a3a3a'};
+                padding: 8px 10px;
+                border-radius: 12px;
+                border: 1.5px solid {'#777777' if is_dark() else '#888888'};
+                outline: none;
+                transition: all 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+                box-shadow: 0px 0px 20px -18px;
+            }}
+            QLineEdit:hover {{
+                border: 2px solid #555555;
+                box-shadow: 0px 0px 20px -17px;
+            }}
+            QLineEdit:active {{
+                transform: scale(0.95);
+            }}
+            QLineEdit:focus {{
+                border: 2px solid grey;
+            }}
+        """)
+        self.search_input.returnPressed.connect(self.search_plugins)
+
         toolbar.addWidget(self.html_toolbar)
         toolbar.addStretch()
+        toolbar.addWidget(self.search_input)  # ganz rechts
 
         tb = QWidget()
         tb.setLayout(toolbar)
@@ -615,26 +693,26 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QScrollArea.NoFrame)
-        self.scroll_area.setStyleSheet("""
-            QScrollArea { background: transparent; }
-            QScrollBar:vertical {
-                background: #292929;
+        self.scroll_area.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; }}
+            QScrollBar:vertical {{
+                background: {'#292929' if theme=="dark" else '#ffffff'};
                 width: 10px;
                 margin: 0;
                 border-radius: 5px;
-            }
-            QScrollBar::handle:vertical {
+            }}
+            QScrollBar::handle:vertical {{
                 background: #666;
                 min-height: 20px;
                 border-radius: 5px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
                 background: none;
                 height: 0;
-            }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
                 background: none;
-            }
+            }}
         """)
         self.scroll_area.setWidget(self.button_container)
 
@@ -646,6 +724,53 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.add_buttons(self.layout)
         self.set_plugin_loader(self.load_plugin_from_path)
 
+    def update_scrollbar_theme(self):
+        if hasattr(self, "scroll_area") and self.scroll_area:
+            self.scroll_area.setStyleSheet(f"""
+                        QScrollArea {{ background: transparent; }}
+                        QScrollBar:vertical {{
+                            background: {'#292929' if theme == "dark" else '#ffffff'};
+                            width: 10px;
+                            margin: 0;
+                            border-radius: 5px;
+                        }}
+                        QScrollBar::handle:vertical {{
+                            background: {'#666' if theme == "dark" else '#999'};
+                            min-height: 20px;
+                            border-radius: 5px;
+                        }}
+                        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                            background: none;
+                            height: 0;
+                        }}
+                        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                            background: none;
+                        }}
+                    """)
+    def update_searchbar_theme(self):
+        self.search_input.setStyleSheet(f"""
+                    QLineEdit {{
+                        background: {'#292929' if is_dark() else '#ffffff'};
+                        color: {'#ffffff' if is_dark() else '#292929'};
+                        padding: 8px 10px;
+                        border-radius: 12px;
+                        border: 1.5px solid {'#777777' if is_dark() else '#888888'};
+                        outline: none;
+                        transition: all 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+                        box-shadow: 0px 0px 20px -18px;
+                    }}
+                    QLineEdit:hover {{
+                        border: 2px solid lightgrey;
+                        box-shadow: 0px 0px 20px -17px;
+                    }}
+                    QLineEdit:active {{
+                        transform: scale(0.95);
+                    }}
+                    QLineEdit:focus {{
+                        border: 2px solid grey;
+                    }}
+                """)
+
     def update_relative_size(self):
         screen = QGuiApplication.screenAt(self.pos())
         if not screen:
@@ -656,8 +781,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
 
     def _build_html_toolbar(self):
         mode = theme
-        # Explorer-Button nur wenn show_explorer_btn True ist
-        explorer_btn = f'<button id="explorerBtn" class="toolbar-btn {mode}" style="margin-left:20px; display:{"inline-block" if self.show_explorer_btn else "none"};">← Explorer</button>'
+        explorer_btn = f'<button id="explorerBtn" class="toolbar-btn {mode}" style="margin-left:1.5rem; display:{"inline-block" if self.show_explorer_btn else "none"};">← Explorer</button>'
 
         html_code = f"""
         <!DOCTYPE html>
@@ -673,15 +797,15 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                 }}
 
                 .toolbar-btn {{
-                    padding: 4px 10px;
-                    border: 1px solid transparent;
-                    border-radius: 6px;
-                    font-size: 14px;
+                    padding: 0.25em 0.675em;
+                    border: 0.07em solid transparent;
+                    border-radius: 0.38em;
+                    font-size: 1em;
                     font-weight: 500;
                     cursor: pointer;
                     transition: background 0.3s, color 0.3s, border-color 0.3s;
-                    min-height: 35px;
-                    min-width: 80px;
+                    min-height: 2.25em;
+                    min-width: 5em;
                     background: transparent !important;
                     outline: none;
                 }}
@@ -690,14 +814,14 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
 
                 .toolbar-container {{
                     display: flex;
-                    align-items: center; 
-                    height: 2.5rem;          
-                    padding: 0 1rem;  
-                    gap: 8px;
+                    align-items: center;
+                    height: 2.5rem;
+                    padding: 0 2vw;
+                    gap: 0.5em;
                     background: transparent !important;
                 }}
 
-                /* --- Toggle Switch bleibt unverändert --- */
+                /* --- Toggle Switch --- */
                 .switch {{
                   position: relative;
                   width: 5rem;
@@ -732,20 +856,6 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                   z-index: 1;
                 }}
 
-                .fill {{
-                  position: fixed;
-                  top: 0;
-                  right: 0;
-                  bottom: 2rem;
-                  left: 0;
-                  background: #484848;
-                  transition: 0.75s all ease;
-                }}
-
-                .switch input:checked ~ .fill {{
-                  background: #E9F8FD;
-                }}
-
                 .stars1,
                 .stars2 {{
                   position: absolute;
@@ -755,22 +865,8 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                   border-radius: 50%;
                   transition: 0.3s all ease;
                 }}
-                .stars1 {{ top: 3px; right: 13px; }}
-                .stars2 {{ top: 20px; right: 28px; }}
-
-                .stars1:after,
-                .stars1:before,
-                .stars2:after,
-                .stars2:before {{
-                  position: absolute;
-                  content: "";
-                  display: block;
-                  height: 0.125rem;
-                  width: 0.125rem;
-                  background: #FFFFFF;
-                  border-radius: 50%;
-                  transition: 0.2s all ease;
-                }}
+                .stars1 {{ top: 0.2em; right: 0.8em; }}
+                .stars2 {{ top: 1.3em; right: 1.75em; }}
 
                 .sun-moon {{
                   position: absolute;
@@ -788,8 +884,8 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
 
                 .sun-moon .dots {{
                   position: absolute;
-                  top: 1.5px;
-                  left: 11.5px;
+                  top: 0.1em;
+                  left: 0.7em;
                   height: 0.5rem;
                   width: 0.5rem;
                   background: #EFEEDB;
@@ -803,13 +899,6 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                   background: #F5EC59;
                   border-color: #E7C65C;
                   transform: rotate(-25deg);
-                }}
-
-                .switch input:checked ~ .sun-moon .dots,
-                .switch input:checked ~ .sun-moon .dots:after,
-                .switch input:checked ~ .sun-moon .dots:before {{
-                  background: #FFFFFF;
-                  border-color: #FFFFFF;
                 }}
 
                 .switch input:checked ~ .background {{
@@ -838,7 +927,6 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
 
                     toggle.addEventListener("change", function() {{
                         bridge.toggleTheme();
-                        // Explorer-Button in Echtzeit anpassen
                         if (explorerBtn) {{
                             if (toggle.checked) {{
                                 explorerBtn.classList.remove('dark');
@@ -863,6 +951,12 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         try:
             if WEBENGINE_AVAILABLE:
                 self.html_toolbar.setHtml(html_code)
+                self.html_toolbar.setAttribute(Qt.WA_TranslucentBackground, True)
+                self.html_toolbar.setAttribute(Qt.WA_OpaquePaintEvent, False)
+                try:
+                    self.html_toolbar.page().setBackgroundColor(QColor(0, 0, 0, 0))
+                except Exception:
+                    pass
         except Exception:
             import traceback
             print("Fehler beim Setzen der Toolbar HTML:", traceback.format_exc())
@@ -871,11 +965,18 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         global theme
         theme = "light" if is_dark() else "dark"
         set_theme(theme, self.app)
-        self.update_button_styles(self.layout)
-        if self.popup:
-            self.popup.update_button_styles(self.popup.layout)
 
-        # Den Explorer-Button im WebEngine nach Themewechsel neu updaten
+        # Scrollbar & Buttons im Hauptfenster aktualisieren
+        self.update_button_styles(self.layout)
+        self.update_scrollbar_theme()
+        self.update_searchbar_theme()
+
+        # Wenn Popup sichtbar ist, auch dort aktualisieren
+        if self.popup and self.popup.isVisible():
+            self.popup.update_button_styles(self.popup.layout)
+            self.popup.update_scrollbar_theme()
+
+        # Toolbar-Button im WebEngine aktualisieren
         if WEBENGINE_AVAILABLE:
             js = f'window.setBtnMode && window.setBtnMode("{theme}");'
             try:
@@ -887,7 +988,6 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.pages.setCurrentWidget(self.scroll_area)
         self.show_explorer_btn = False
         self._build_html_toolbar()
-        # Explorer-Button beim Zurücksetzen auch updaten
         if WEBENGINE_AVAILABLE:
             js = f'window.setBtnMode && window.setBtnMode("{theme}");'
             try:
@@ -897,8 +997,9 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
 
     def load_plugin_from_path(self, path: str, source_widget=None):
         try:
+            plugin_mode = "Popup" if isinstance(source_widget, PopupWindow) else "Window"
             if path.lower().endswith('.py'):
-                widget = self.load_python_plugin_widget(path)
+                widget = self.load_python_plugin_widget(path, mode=plugin_mode)
                 if widget is None:
                     QMessageBox.warning(source_widget or self, "Kein Plugin",
                                         f"{os.path.basename(path)} enthält keine Klasse 'PluginWidget'.")
@@ -922,7 +1023,6 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                 self.pages.setCurrentWidget(container)
                 self.show_explorer_btn = True
                 self._build_html_toolbar()
-                # Explorer-Button beim Anzeigen des Plugins updaten
                 if WEBENGINE_AVAILABLE:
                     js = f'window.setBtnMode && window.setBtnMode("{theme}");'
                     try:
@@ -932,18 +1032,95 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         except Exception as e:
             QMessageBox.critical(source_widget or self, "Fehler beim Laden", f"{e}")
 
-    def load_python_plugin_widget(self, path: str, mode="window"):
+    def load_python_plugin_widget(self, path: str, mode="Window"):
         try:
             spec = importlib.util.spec_from_file_location("plugin_module", path)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             cls = getattr(mod, "PluginWidget", None)
             if cls is not None and isinstance(cls, type):
-                return cls()
+                # Versuche, mode zu übergeben (einige Plugins erwarten mode)
+                try:
+                    return cls(mode=mode)
+                except TypeError:
+                    return cls()
             return None
         except Exception:
             return None
 
+    def search_plugins(self):
+        """Durchsucht den scripts-Ordner nach Plugins und zeigt Treffer im Hauptfenster an."""
+        query = self.search_input.text().strip().lower()
+        scripts_dir = os.path.abspath(getattr(self, "SCRIPT_FOLDER", "scripts"))
+
+        if not query:
+            # Leeres Suchfeld -> Explorer normal anzeigen
+            self.pages.setCurrentWidget(self.scroll_area)
+            self.current_path = scripts_dir
+            self.add_buttons(self.layout)
+            return
+
+        # Dateien filtern
+        all_entries = []
+        for root, dirs, files in os.walk(scripts_dir):
+            # Zuerst Ordner prüfen
+            for d in dirs:
+                if query in d.lower():
+                    all_entries.append(os.path.join(root, d))
+            # Dann Dateien prüfen
+            for f in files:
+                if f.lower().endswith((".py", ".html")):
+                    name_only = f.rsplit(".", 1)[0].lower()  # Endung abschneiden
+                    if query in name_only:
+                        all_entries.append(os.path.join(root, f))
+
+        if not all_entries:
+            QMessageBox.information(self, "Keine Treffer", f"Keine Plugins gefunden für: {query}")
+            return
+
+        # Temporär current_path setzen auf einen virtuellen Pfad, damit add_buttons benutzt werden kann
+        self._search_results = all_entries  # Zwischenspeicher für add_buttons
+
+        # Wir erstellen einen "virtuellen" add_buttons-Aufruf
+        self._add_search_buttons()
+
+    def _add_search_buttons(self):
+        """Erstellt Buttons für die Suchergebnisse ähnlich wie im Explorer."""
+        layout = self.layout
+
+        # Alte Buttons entfernen
+        for i in reversed(range(layout.count())):
+            item = layout.itemAt(i)
+            widget = item.widget() if item else None
+            if widget:
+                widget.setParent(None)
+
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignTop)
+
+        for full_path in sorted(self._search_results):
+            entry = os.path.basename(full_path)
+            try:
+                if os.path.isdir(full_path):
+                    display_name = entry  # Ordnername bleibt unverändert
+                    button = QPushButton(display_name)
+                    button.clicked.connect(lambda _, p=full_path: self.enter_directory(p))
+                    button.setProperty("entry_type", "folder")
+                elif entry.endswith((".py", ".html")):
+                    display_name = entry.rsplit(".", 1)[0]  # Dateiendung abschneiden
+                    button = QPushButton(display_name)
+                    button.clicked.connect(lambda _, p=full_path: self.run_script(p))
+                    button.setProperty("entry_type", "file")
+                else:
+                    continue
+                button.setMinimumHeight(60)
+                button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                layout.addWidget(button)
+            except Exception:
+                print("Fehler beim Erstellen eines Buttons:", traceback.format_exc())
+
+        self.update_button_styles(layout)
 
 class TrayApp(QApplication):
     def __init__(self, sys_argv):
@@ -959,10 +1136,13 @@ class TrayApp(QApplication):
         self.tray.activated.connect(self.on_tray_activated)
 
     def on_tray_activated(self, reason):
+        global mode
         if reason == QSystemTrayIcon.Context:
+            mode = "Popup"
             self.popup.show_popup()
         elif reason == QSystemTrayIcon.Trigger:
             if self.main_window.isMinimized() or not self.main_window.isVisible():
+                mode = "Window"
                 self.main_window.showNormal()
                 self.main_window.activateWindow()
                 self.main_window.raise_()
