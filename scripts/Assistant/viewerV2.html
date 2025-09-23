@@ -6,58 +6,63 @@
   <style>
     body { margin: 0; overflow: hidden; }
     canvas { display: block; }
+    #chat-container {
+      position: fixed;
+      bottom: 2vh;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 40vw;
+      max-height: 30vh;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      font-family: sans-serif;
+      padding: 1vh 1vw;
+      overflow-y: auto;
+      border-radius: 0.5vh;
+      z-index: 1000;
+    }
+    #chat-messages {
+      max-height: 22vh;
+      overflow-y: auto;
+      margin-bottom: 1vh;
+    }
+    #chat-input {
+      width: 100%;
+      padding: 1vh 1vw;
+      box-sizing: border-box;
+      border-radius: 0.3vh;
+      border: none;
+      font-size: 1.6vh;
+    }
   </style>
 </head>
 <body>
-<div id="chat-container" style="
-   position: fixed;
-  bottom: 2vh;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 40vw;
-  max-height: 30vh;
-  background: rgba(0, 0, 0, 0.7);
-  color: white;
-  font-family: sans-serif;
-  padding: 1vh 1vw;
-  overflow-y: auto;
-  border-radius: 0.5vh;
-  z-index: 1000;
-">
-  <div id="chat-messages" style="
-  max-height: 22vh;
-  overflow-y: auto;
-  margin-bottom: 1vh;
-  ">
-  </div>
-  <input type="text" id="chat-input" placeholder="Schreibe hier..." style="
-    width: 100%;
-    padding: 1vh 1vw;
-    box-sizing: border-box;
-    border-radius: 0.3vh;
-    border: none;
-    font-size: 1.6vh;
-  "/>
+<div id="chat-container">
+  <div id="chat-messages"></div>
+  <input type="text" id="chat-input" placeholder="Schreibe hier..." />
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/three/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three/examples/js/loaders/GLTFLoader.js"></script>
 
 <script>
+/* -------------------------
+   Globals & Chat handling
+   ------------------------- */
 let scene, camera, renderer, mixer;
-const morphMeshes = [];
+const morphMeshes = []; // alle Meshes mit MorphTargets
 
 // Blink-Variablen
-let blinkDuration = 0.1;
+let blinkDuration = 0.1; // Sekunden für die "halbe" Blinkphase
 let blinkTimer = 0;
 let blinkInterval = getRandomInterval();
 let blinking = false;
 
 // Mund-Animation
-let activeMouthMorphs = {}; // mehrere Morphs gleichzeitig
+let activeMouthMorphs = {}; // { resolvedMorphName: value }
 let mouthAnimationQueue = [];
 let mouthAnimating = false;
-const mouthTransitionDuration = 100;
+const mouthTransitionDuration = 200; // ms (erhöht für flüssigere Übergänge)
 
 // Manueller Mund
 let manualMouthOpen = false;
@@ -87,7 +92,71 @@ function getRandomInterval() {
   return 1 + Math.random() * 5;
 }
 
-// ---- Three.js Setup ----
+/* -------------------------
+   Viseme Mapping (Benutzerdaten)
+   ------------------------- */
+// Deine erfassten Namen:
+const availableNames = [
+  "mmd_sdef_c","mmd_sdef_r0","mmd_sdef_r1","a","i","u","e","o",
+  "o▲o","o∧o","oωo","ωA","oワo","yu","hehe mund","scream","eeehh",
+  ":)","Blinzeln","kind",">:)", "X)", "-_-", "O_O","Azusa","evil",
+  "Kind","eye alt","hehe eye","Nani 1","nase",">:I","sad","aufmerksam",
+  "angry","neutral","shift","unshift","smol brow","up brow","down brow",
+  "vor","augen strich","kein augen strich","insane","cat","ded","HL2"
+];
+
+// Viseme → (preferred) morph target name(s)
+const visemeMorphTargets = {
+  "AI": ["a"],
+  "E": ["e"],
+  "I": ["i"],
+  "O": ["o"],
+  "U": ["u"],
+  "FV": ["eeehh"],
+  "MBP": ["oωo", "oワo", "o▲o"],
+  "L": ["hehe mund"],
+  "WQ": ["yu"]
+};
+
+/* -------------------------
+   Name resolution helpers
+   ------------------------- */
+
+// Global lookup: lowercase morphName -> canonical morphName from availableNames (first match)
+const globalNameLookup = {};
+availableNames.forEach(n => globalNameLookup[n.toLowerCase()] = n);
+
+// When we load meshes, each mesh will have a __morphIndexCache: lowercaseName->index
+function resolveMorphForMesh(mesh, requestedNames) {
+  // requestedNames can be a string or array of strings
+  const candidates = Array.isArray(requestedNames) ? requestedNames : [requestedNames];
+
+  // prefer first candidate that exists on the mesh (case-insensitive)
+  for (let cand of candidates) {
+    if (!cand) continue;
+    const keyLower = cand.toLowerCase();
+    // Direct check if mesh has dictionary
+    if (!mesh.morphTargetDictionary) continue;
+    // iterate mesh dictionary keys to find case-insensitive match quickly
+    for (let dictKey in mesh.morphTargetDictionary) {
+      if (dictKey.toLowerCase() === keyLower) {
+        return dictKey; // return actual key name used in this mesh
+      }
+    }
+    // fallback: check global lookup mapping
+    if (globalNameLookup[keyLower]) {
+      const globalName = globalNameLookup[keyLower];
+      for (let dictKey in mesh.morphTargetDictionary) {
+        if (dictKey === globalName) return dictKey;
+      }
+    }
+  }
+  return null;
+}
+
+/* -------------------------
+   Three.js Setup & Loader
+   ------------------------- */
 function init() {
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -95,10 +164,10 @@ function init() {
 
   try {
     renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-    console.log("✅ Renderer: WebGL2");
+    console.log("✅ Renderer erstellt (WebGLRenderer)");
   } catch (e) {
     renderer = new THREE.WebGL1Renderer({ antialias: true });
-    console.warn("⚠️ Renderer: Fallback auf WebGL1");
+    console.warn("⚠️ Fallback auf WebGL1Renderer");
   }
 
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -118,14 +187,21 @@ function init() {
       gltf.scene.traverse((child) => {
         if (child.isMesh) {
           let mat = child.material;
-          if (mat.transparent) mat.alphaTest = 0.5;
-          mat.depthWrite = true;
-          mat.depthTest = true;
-          if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
+          if (mat) {
+            if (mat.transparent) mat.alphaTest = 0.5;
+            mat.depthWrite = true;
+            mat.depthTest = true;
+            if (mat.map && THREE.SRGBColorSpace) mat.map.colorSpace = THREE.SRGBColorSpace;
+          }
 
           if (child.morphTargetInfluences && child.morphTargetInfluences.length > 0) {
+            // Erstellt einen Cache für schnelle Lookup-Indexierung (lowercase -> index)
+            child.__morphIndexCache = {};
+            for (let key in child.morphTargetDictionary) {
+              child.__morphIndexCache[key.toLowerCase()] = child.morphTargetDictionary[key];
+            }
             morphMeshes.push(child);
-            console.log(`Mesh geladen: ${child.name}, MorphTargets: ${Object.keys(child.morphTargetDictionary)}`);
+            console.log(`Mesh geladen: ${child.name}, MorphTargets:`, Object.keys(child.morphTargetDictionary));
           }
         }
       });
@@ -134,9 +210,19 @@ function init() {
 
       if (gltf.animations && gltf.animations.length) {
         mixer = new THREE.AnimationMixer(gltf.scene);
-        const action = mixer.clipAction(gltf.animations[0]);
-        action.play();
+        const animationName = "Idle";
+        const clip = gltf.animations.find(anim => anim.name === animationName);
+        if (clip) {
+          const action = mixer.clipAction(clip);
+          action.play();
+        } else {
+          console.warn(`Animation "${animationName}" nicht gefunden, spiele erste Animation.`);
+          const action = mixer.clipAction(gltf.animations[0]);
+          action.play();
+        }
       }
+
+      console.log("Geladene Animationen:", (gltf.animations || []).map(a => a.name));
     },
     undefined,
     function (error) {
@@ -156,20 +242,79 @@ function init() {
   });
 }
 
-// ---- Viseme Mapping ----
-const visemeMorphTargets = {
-  "AI": "a",
-  "E": "e",
-  "I": "i",
-  "O": "o",
-  "U": "u",
-  "FV": "eeehh",
-  "MBP": "oωo",
-  "L": "hehe mund",
-  "WQ": "yu"
-};
+/* -------------------------
+   Mapping-Utilities (viseme name → model morph name)
+   ------------------------- */
+function getPreferredMorphNamesForViseme(visemeKey) {
+  // gibt Array von Kandidaten zurück (in order of preference)
+  const cand = visemeMorphTargets[visemeKey];
+  if (!cand) return [];
+  return cand;
+}
 
-// ---- Mundanimation aus Text ----
+/* -------------------------
+   Set / Smooth set functions
+   ------------------------- */
+function setMouthInfluence(value, morphName) {
+  if (!morphName) return;
+
+  // Try to resolve a canonical morph name from availableNames or pass-through
+  let resolved = null;
+  if (globalNameLookup[morphName.toLowerCase()]) resolved = globalNameLookup[morphName.toLowerCase()];
+  else resolved = morphName;
+
+  // Write to active map (do not immediately remove at exact zero — wait for threshold)
+  activeMouthMorphs[resolved] = value;
+
+  // If value is very small, remove after a tiny delay (so fades finish)
+  if (Math.abs(value) < 1e-3) {
+    // schedule removal on next frame to avoid race conditions in animations
+    requestAnimationFrame(() => {
+      if (Math.abs(activeMouthMorphs[resolved] || 0) < 1e-3) {
+        delete activeMouthMorphs[resolved];
+      }
+    });
+  }
+  // debug
+  // console.log(`activeMouthMorphs[${resolved}] = ${activeMouthMorphs[resolved]}`);
+}
+
+function smoothSetMouthInfluence(targetValue, morphName, duration = mouthTransitionDuration, onComplete) {
+  const resolvedCandidates = Array.isArray(morphName) ? morphName : [morphName];
+  // We'll attempt to find one canonical name from global list
+  let preferred = null;
+  for (let c of resolvedCandidates) {
+    if (!c) continue;
+    const lookup = globalNameLookup[c.toLowerCase()];
+    if (lookup) { preferred = lookup; break; }
+  }
+  if (!preferred && typeof morphName === "string") preferred = morphName;
+
+  // Start value defaults
+  const startValue = activeMouthMorphs[preferred] || 0;
+  const startTime = performance.now();
+
+  function step() {
+    const now = performance.now();
+    const elapsed = now - startTime;
+    let t = duration <= 0 ? 1 : (elapsed / duration);
+    if (t > 1) t = 1;
+    const newValue = startValue + (targetValue - startValue) * t;
+    setMouthInfluence(newValue, preferred);
+
+    if (t < 1) requestAnimationFrame(step);
+    else {
+      // ensure exact final value
+      setMouthInfluence(targetValue, preferred);
+      if (onComplete) onComplete();
+    }
+  }
+  step();
+}
+
+/* -------------------------
+   Text → Viseme Sequence → Queue
+   ------------------------- */
 function animateMouthFromText(text) {
   let visemeSequence = [];
   const upper = text.toUpperCase();
@@ -198,18 +343,32 @@ function animateMouthFromText(text) {
 function animateNextMouthSmooth() {
   if (mouthAnimationQueue.length === 0) {
     // Alle Morphs zurücksetzen
-    Object.keys(activeMouthMorphs).forEach(m => setMouthInfluence(0, m));
+    Object.keys(activeMouthMorphs).forEach(m => smoothSetMouthInfluence(0, m));
     mouthAnimating = false;
     return;
   }
 
   const visemeKey = mouthAnimationQueue.shift();
-  const morphName = visemeMorphTargets[visemeKey];
+  const morphCandidates = getPreferredMorphNamesForViseme(visemeKey);
+
+  if (morphCandidates.length === 0) {
+    // kein Mapping vorhanden — überspringen
+    animateNextMouthSmooth();
+    return;
+  }
+
+  // Wähle den ersten Kandidaten, der in einem Mesh existiert (falls keiner, nehme ersten)
+  let chosen = null;
+  for (let mesh of morphMeshes) {
+    const found = resolveMorphForMesh(mesh, morphCandidates);
+    if (found) { chosen = found; break; }
+  }
+  if (!chosen) chosen = morphCandidates[0];
 
   // Öffnen
-  smoothSetMouthInfluence(0.5, morphName, mouthTransitionDuration, () => {
+  smoothSetMouthInfluence(1, chosen, mouthTransitionDuration, () => {
     // Schließen
-    smoothSetMouthInfluence(0, morphName, mouthTransitionDuration * 0.7, () => {
+    smoothSetMouthInfluence(0, chosen, mouthTransitionDuration * 0.7, () => {
       setTimeout(() => {
         animateNextMouthSmooth();
       }, 80);
@@ -217,43 +376,39 @@ function animateNextMouthSmooth() {
   });
 }
 
-// ---- Smooth Animation ----
-function smoothSetMouthInfluence(targetValue, morphName, duration, onComplete) {
-  const startValue = activeMouthMorphs[morphName] || 0;
-  const startTime = performance.now();
-
-  function step() {
-    const now = performance.now();
-    const elapsed = now - startTime;
-    let t = elapsed / duration;
-    if (t > 1) t = 1;
-
-    const newValue = startValue + (targetValue - startValue) * t;
-    setMouthInfluence(newValue, morphName);
-
-    if (t < 1) requestAnimationFrame(step);
-    else if (onComplete) onComplete();
-  }
-  step();
-}
-
-// ---- Set Mouth Influence (für mehrere Morphs gleichzeitig) ----
-function setMouthInfluence(value, morphName) {
-  if (!morphName) return;
-  activeMouthMorphs[morphName] = value;
-  if (value === 0) delete activeMouthMorphs[morphName];
-}
-
-// ---- Manuelles Mund-Öffnen ----
+/* -------------------------
+   Manuelles Mund-Öffnen (additiv)
+   ------------------------- */
 window.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() === "m") {
     manualMouthOpen = !manualMouthOpen;
-    if (manualMouthOpen) setMouthInfluence(1, "o");
-    else setMouthInfluence(0, "o");
+    console.log("M-Taste gedrückt. manualMouthOpen=", manualMouthOpen);
+    if (manualMouthOpen) {
+      // wähle bestmöglichen Mund-Morph (prüfe Liste)
+      const candidates = ["X)"];
+      let pick = null;
+      for (let mesh of morphMeshes) {
+        for (let c of candidates) {
+          const found = resolveMorphForMesh(mesh, c);
+          if (found) { pick = found; break; }
+        }
+        if (pick) break;
+      }
+      if (!pick) pick = candidates[0];
+      // setze additiv (1.0)
+      setMouthInfluence(1, pick);
+      // speichere als override key, damit wir beim Deaktivieren genau wissen was löschen
+      window.__manualMouthKey = pick;
+    } else {
+      if (window.__manualMouthKey) setMouthInfluence(0, window.__manualMouthKey);
+      window.__manualMouthKey = null;
+    }
   }
 });
 
-// ---- Animate Loop ----
+/* -------------------------
+   Animate Loop
+   ------------------------- */
 function animate() {
   requestAnimationFrame(animate);
   if (mixer) mixer.update(0.016);
@@ -276,24 +431,69 @@ function animate() {
       blinkInterval = getRandomInterval();
     }
   }
+
+  // Wende Blinzeln auf alle Meshes an (case-insensitive Suche im Cache)
   morphMeshes.forEach(mesh => {
-    const blinkIndex = mesh.morphTargetDictionary["Blinzeln"];
-    if (typeof blinkIndex !== "undefined") mesh.morphTargetInfluences[blinkIndex] = blinkValue;
+    const dict = mesh.morphTargetDictionary || {};
+    // Try to find a blink key (many models use "Blinzeln" but check lowercase)
+    let blinkKey = null;
+    for (let key in dict) {
+      if (key.toLowerCase() === "blinzeln") { blinkKey = key; break; }
+    }
+    if (blinkKey) {
+      const idx = dict[blinkKey];
+      if (typeof idx !== "undefined") mesh.morphTargetInfluences[idx] = blinkValue;
+    }
   });
 
-  // Mundbewegungen (alle aktiven Morphs anwenden, außer manuell)
-  if (!manualMouthOpen) {
-    morphMeshes.forEach(mesh => {
-      Object.entries(activeMouthMorphs).forEach(([morphName, influence]) => {
-        const idx = mesh.morphTargetDictionary[morphName];
-        if (typeof idx !== "undefined") mesh.morphTargetInfluences[idx] = influence;
-      });
+  // Mundbewegungen (aktuelle activeMouthMorphs werden auf alle Meshes angewendet)
+  morphMeshes.forEach(mesh => {
+    const dict = mesh.morphTargetDictionary || {};
+    // für jeden aktiven Morph: versuche index in diesem mesh zu finden (mit Cache)
+    Object.entries(activeMouthMorphs).forEach(([morphName, influence]) => {
+      if (!morphName) return;
+      // benutze mesh.__morphIndexCache falls vorhanden
+      let idx = undefined;
+      if (mesh.__morphIndexCache && mesh.__morphIndexCache[morphName.toLowerCase()] !== undefined) {
+        idx = mesh.__morphIndexCache[morphName.toLowerCase()];
+      } else {
+        // bruteforce: find exact key ignoring case
+        for (let key in dict) {
+          if (key.toLowerCase() === morphName.toLowerCase()) {
+            idx = dict[key];
+            // update cache
+            if (!mesh.__morphIndexCache) mesh.__morphIndexCache = {};
+            mesh.__morphIndexCache[morphName.toLowerCase()] = idx;
+            break;
+          }
+        }
+      }
+      if (typeof idx !== "undefined") {
+        // Wenn manual override aktiv und dies der manuelle Key ist, setze auf max(influence, manual)
+        if (manualMouthOpen && window.__manualMouthKey && window.__manualMouthKey.toLowerCase() === morphName.toLowerCase()) {
+          mesh.morphTargetInfluences[idx] = Math.max(mesh.morphTargetInfluences[idx] || 0, influence);
+        } else {
+          mesh.morphTargetInfluences[idx] = influence;
+        }
+      } else {
+        // Wenn morphName auf *keinem* Mesh existiert, logge das einmal (für Debug)
+        // (gibt nicht für jeden Frame aus, nur falls noch nicht gemeldet)
+        if (!window.__missingMorphWarns) window.__missingMorphWarns = new Set();
+        const warnKey = morphName + "|" + mesh.uuid;
+        if (!window.__missingMorphWarns.has(warnKey)) {
+          console.warn(`Morph "${morphName}" nicht in Mesh "${mesh.name}" gefunden.`);
+          window.__missingMorphWarns.add(warnKey);
+        }
+      }
     });
-  }
+  });
 
   renderer.render(scene, camera);
 }
 
+/* -------------------------
+   Start
+   ------------------------- */
 init();
 animate();
 </script>
