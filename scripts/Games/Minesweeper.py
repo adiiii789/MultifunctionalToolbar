@@ -16,7 +16,8 @@ class PluginWidget(QMainWindow):
         self.setCentralWidget(central)
 
         # HTML UI
-        self.html = """
+        if mode == "Window":
+            self.html = """
 <!DOCTYPE html>
 <html lang="de">
 <head>
@@ -396,4 +397,174 @@ class PluginWidget(QMainWindow):
 </body>
 </html>
         """
+        elif mode == "Popup":
+            self.html = """<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Minesweeper – Fixed 10x16 Fullscreen</title>
+<style>
+  :root{
+    --win-gray:#c0c0c0;
+    --win-dark:#404040;
+    --win-mid:#808080;
+    --win-light:#ffffff;
+    --panel:#bdbdbd;
+    --cell-face:#bdbdbd;
+    --n1:#0000ff; --n2:#008000; --n3:#ff0000;
+    --n4:#000080; --n5:#800000; --n6:#008080;
+    --n7:#000000; --n8:#808080;
+  }
+
+  html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#2e2e2e;display:flex;justify-content:center;align-items:center;}
+  .board-wrap{width:100%;height:100%;display:flex;justify-content:center;align-items:center;}
+  .board{
+    display:grid; gap:0;
+    background:var(--win-mid);
+    border:2px solid var(--win-dark);
+    box-shadow: inset -2px -2px 0 var(--win-mid), inset 2px 2px 0 var(--win-light);
+  }
+  .cell{
+    display:grid; place-items:center; font-weight:700;
+    background:var(--cell-face);
+    border-right:1px solid var(--win-light);
+    border-bottom:1px solid var(--win-light);
+    border-left:1px solid var(--win-mid);
+    border-top:1px solid var(--win-mid);
+    box-shadow: inset -2px -2px 0 var(--win-mid), inset 2px 2px 0 var(--win-light);
+    cursor:pointer;
+  }
+  .cell.revealed{
+    background:#d6d6d6;
+    box-shadow: inset 1px 1px 0 var(--win-mid), inset -1px -1px 0 var(--win-light);
+    cursor:default;
+    border:1px solid var(--win-mid);
+  }
+  .cell.flag::after{content:"⚑"; font-size:16px; color:#000;}
+  .cell.mine::after{content:"●"; color:#000; font-size:14px;}
+  .bang{background:#ff6961 !important;}
+  .n1{color:var(--n1)} .n2{color:var(--n2)} .n3{color:var(--n3)}
+  .n4{color:var(--n4)} .n5{color:var(--n5)} .n6{color:var(--n6)}
+  .n7{color:var(--n7)} .n8{color:var(--n8)}
+</style>
+</head>
+<body>
+<div class="board-wrap">
+  <div class="board" id="board"></div>
+</div>
+
+<script>
+(()=>{
+  const R=16, C=10, M=35; // Höhe x Breite
+  let grid=[], started=false, finished=false, flags=0, time=0, tId=null;
+
+  const board=document.getElementById('board');
+
+  function resizeCells(){
+    const wrap = board.parentElement.getBoundingClientRect();
+    const size = Math.floor(Math.min(wrap.width/C, wrap.height/R));
+    board.style.gridTemplateColumns=`repeat(${C}, ${size}px)`;
+    board.style.gridTemplateRows=`repeat(${R}, ${size}px)`;
+    for(const el of board.children){el.style.width=el.style.height=size+'px';}
+  }
+
+  window.addEventListener('resize', resizeCells);
+
+  const idx=(r,c)=> r*C+c;
+  const inB=(r,c)=> r>=0 && r<R && c>=0 && c<C;
+  const neigh=(r,c)=> { const a=[]; for(let dr=-1;dr<=1;dr++) for(let dc=-1;dc<=1;dc++) if(dr||dc){ const nr=r+dr,nc=c+dc; if(inB(nr,nc)) a.push([nr,nc]);} return a; }
+
+  const buildUI=()=>{
+    board.innerHTML='';
+    for(let r=0;r<R;r++){
+      for(let c=0;c<C;c++){
+        const el=document.createElement('div');
+        el.className='cell';
+        el.dataset.r=r; el.dataset.c=c;
+        attach(el);
+        board.appendChild(el);
+      }
+    }
+    resizeCells();
+  }
+
+  const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
+
+  function placeMines(sr,sc){
+    const banned=new Set([idx(sr,sc), ...neigh(sr,sc).map(([r,c])=>idx(r,c))]);
+    let placed=0;
+    while(placed<M){
+      const r=(Math.random()*R)|0, c=(Math.random()*C)|0, k=idx(r,c);
+      if(banned.has(k) || grid[k].mine) continue;
+      grid[k].mine=true; placed++;
+    }
+    for(let r=0;r<R;r++) for(let c=0;c<C;c++){
+      const k=idx(r,c);
+      if(grid[k].mine) continue;
+      grid[k].adj=neigh(r,c).reduce((a,[nr,nc])=>a+(grid[idx(nr,nc)].mine?1:0),0);
+    }
+  }
+
+  function cellEl(r,c){return board.children[idx(r,c)];}
+
+  function reveal(r,c){
+    if(!inB(r,c)) return;
+    const k=idx(r,c), cell=grid[k], el=cellEl(r,c);
+    if(cell.revealed||cell.flagged||finished) return;
+    if(!started){placeMines(r,c); started=true;}
+    if(cell.mine){el.classList.add('revealed','mine','bang'); lose(); return;}
+    cell.revealed=true; el.classList.add('revealed');
+    if(cell.adj>0){el.textContent=cell.adj; el.classList.add('n'+cell.adj);}
+    else for(const [nr,nc] of neigh(r,c)) reveal(nr,nc);
+    checkWin();
+  }
+
+  function toggleFlag(r,c){
+    if(finished) return;
+    const k=idx(r,c), cell=grid[k], el=cellEl(r,c);
+    if(cell.revealed) return;
+    cell.flagged=!cell.flagged;
+    el.classList.toggle('flag',cell.flagged);
+    flags += cell.flagged?1:-1;
+    checkWin();
+  }
+
+  function chord(r,c){
+    const k=idx(r,c), cell=grid[k];
+    if(!cell.revealed || cell.adj===0) return;
+    const ns=neigh(r,c);
+    const f=ns.reduce((a,[nr,nc])=>a+(grid[idx(nr,nc)].flagged?1:0),0);
+    if(f===cell.adj) for(const [nr,nc] of ns) if(!grid[idx(nr,nc)].flagged) reveal(nr,nc);
+  }
+
+  function lose(){ finished=true; stopTimer(); for(let r=0;r<R;r++) for(let c=0;c<C;c++){ const k=idx(r,c), cell=grid[k], el=cellEl(r,c); if(cell.mine) el.classList.add('mine','revealed'); } }
+  function checkWin(){ if(finished) return; let hidden=0; for(const c of grid) if(!c.revealed) hidden++; if(hidden===M){ finished=true; stopTimer(); for(let r=0;r<R;r++) for(let c=0;c<C;c++){ const k=idx(r,c), cell=grid[k]; if(cell.mine) cellEl(r,c).classList.add('mine','revealed');}}}
+
+  function attach(el){
+    const r=+el.dataset.r, c=+el.dataset.c;
+    let longT=null, didLong=false;
+    el.addEventListener('click', e=>{if(didLong){didLong=false;return;} const cell=grid[idx(r,c)]; if(e.detail===2 && cell.revealed) chord(r,c); else if(!cell.flagged) reveal(r,c);});
+    el.addEventListener('contextmenu', e=>{e.preventDefault(); toggleFlag(r,c);});
+    el.addEventListener('touchstart', e=>{didLong=false; longT=setTimeout(()=>{ toggleFlag(r,c); didLong=true; },450);},{passive:true});
+    el.addEventListener('touchend', e=>{if(longT){clearTimeout(longT); longT=null;} if(!didLong){const cell=grid[idx(r,c)]; if(!cell.flagged) reveal(r,c);}}, {passive:true});
+  }
+
+  function startTimer(){if(tId)return;tId=setInterval(()=>time++,1000);}
+  function stopTimer(){clearInterval(tId);tId=null;}
+
+  function reset(){
+    stopTimer(); time=0; started=false; finished=false; flags=0;
+    grid=Array.from({length:R*C},()=>({mine:false,revealed:false,flagged:false,adj:0}));
+    buildUI();
+  }
+
+  document.addEventListener('keydown', e=>{if(e.key==='r'||e.key==='R') reset();});
+
+  reset();
+})();
+</script>
+</body>
+</html>
+"""
         self.browser.setHtml(self.html)
