@@ -7,12 +7,13 @@ from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QSystemTrayIcon, QMainWindow, QSizePolicy, QHBoxLayout, QLabel,
-    QStackedWidget, QMessageBox, QScrollArea, QLineEdit, QSpacerItem
+    QStackedWidget, QMessageBox, QScrollArea, QLineEdit, QSpacerItem, QFileDialog
 )
 from PyQt5.QtGui import QCursor, QIcon, QColor, QGuiApplication
 from PyQt5.QtCore import (
     Qt, QRect, QPoint, QFileSystemWatcher, QObject, pyqtSlot, QUrl, QPropertyAnimation, QEasingCurve, QEvent
 )
+
 
 try:
     from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings
@@ -200,6 +201,156 @@ class PluginWidget(QWidget):
 
 class ButtonContentMixin:
     SCRIPT_FOLDER = "scripts"
+    # --- Favoriten (persistente Verzeichnisse) ---
+    def _favorites_store_path(self):
+        # Im scripts-Ordner als "versteckte" Datei – wird nicht gelistet, da dein Code _* skippt
+        root = os.path.abspath(self.SCRIPT_FOLDER)
+        return os.path.join(root, "_folders.json")
+
+    def _load_favorites(self):
+        self._favorite_dirs = []
+        try:
+            import json
+            p = self._favorites_store_path()
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f) or []
+                    # Nur existierende Pfade behalten
+                    self._favorite_dirs = [d for d in data if isinstance(d, str) and os.path.isdir(d)]
+        except Exception:
+            self._favorite_dirs = []
+
+    def _save_favorites(self):
+        try:
+            import json
+            p = self._favorites_store_path()
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(self._favorite_dirs, f, ensure_ascii=False, indent=2)
+        except Exception:
+            print("Favoriten konnten nicht gespeichert werden:", traceback.format_exc())
+
+    def _ensure_in_favorites(self, path):
+        path = os.path.abspath(path)
+        if path not in self._favorite_dirs:
+            self._favorite_dirs.append(path)
+            self._save_favorites()
+
+    def _remove_from_favorites(self, path):
+        path = os.path.abspath(path)
+        if path in self._favorite_dirs:
+            self._favorite_dirs.remove(path)
+            self._save_favorites()
+
+    def _ensure_header_controls(self, layout):
+        """
+        Header über der Dateiliste:
+        - Button: '＋ Ordner hinzufügen'
+        - Rechts: Favoriten-Shortcuts (persistente Verzeichnisse), inkl. Entfernen
+        """
+        header = None
+        for i in range(layout.count()):
+            w = layout.itemAt(i).widget()
+            if w and w.objectName() == "files_header_controls":
+                header = w
+                break
+
+        if header is None:
+            header = QWidget()
+            header.setObjectName("files_header_controls")
+            h = QHBoxLayout(header)
+            h.setContentsMargins(8, 8, 8, 8)
+            h.setSpacing(8)
+
+            btn_add = QPushButton("＋ Ordner hinzufügen")
+            btn_add.setObjectName("btn_add_folder")
+            btn_add.setToolTip("Weiteres Verzeichnis auswählen und öffnen")
+            btn_add.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            btn_add.clicked.connect(self._add_directory_via_dialog)
+            h.addWidget(btn_add)
+
+            # Platz für Favoriten rechts
+            fav_wrap = QWidget()
+            fav_wrap.setObjectName("favorites_wrap")
+            fav_layout = QHBoxLayout(fav_wrap)
+            fav_layout.setContentsMargins(0, 0, 0, 0)
+            fav_layout.setSpacing(6)
+            h.addWidget(fav_wrap, 1)
+
+            layout.insertWidget(0, header)
+
+        # Favoritenleiste neu rendern
+        self._render_favorites(header.findChild(QWidget, "favorites_wrap"))
+    def _render_favorites(self, container: QWidget):
+        # Container leeren
+        lay = container.layout()
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w:
+                w.setParent(None)
+
+        # Falls noch nicht geladen:
+        if not hasattr(self, "_favorite_dirs"):
+            self._load_favorites()
+
+        # Für jeden Favoriten einen kleinen Button + Entfernen-Icon
+        for path in self._favorite_dirs:
+            row = QWidget()
+            hl = QHBoxLayout(row)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(4)
+
+            name = os.path.basename(path.rstrip("\\/")) or path
+            b = QPushButton(name)
+            b.setToolTip(path)
+            b.setObjectName("fav_btn")
+            b.setProperty("entry_type", "favorite")
+            b.setMinimumHeight(28)
+            b.clicked.connect(lambda _, p=path: self.enter_directory(p))
+            hl.addWidget(b)
+
+            x = QPushButton("✕")
+            x.setObjectName("fav_remove_btn")
+            x.setToolTip("Aus Favoriten entfernen")
+            x.setFixedSize(24, 24)
+            x.clicked.connect(lambda _, p=path, c=container: self._on_remove_favorite(p, c))
+            hl.addWidget(x)
+
+            lay.addWidget(row)
+    def _on_remove_favorite(self, path, container):
+        self._remove_from_favorites(path)
+        self._render_favorites(container)
+
+    def _add_directory_via_dialog(self):
+        start_dir = getattr(self, "current_path", None) or os.path.expanduser("~")
+        path = QFileDialog.getExistingDirectory(self, "Verzeichnis auswählen", start_dir)
+        if not path:
+            return
+
+        # 1) In Favoriten aufnehmen (persistiert in scripts/_folders.json)
+        self._ensure_in_favorites(path)
+
+        # 2) Favoriten-Leiste sofort aktualisieren
+        if hasattr(self, "layout"):
+            header = None
+            for i in range(self.layout.count()):
+                w = self.layout.itemAt(i).widget()
+                if w and w.objectName() == "files_header_controls":
+                    header = w
+                    break
+            if header:
+                fav_wrap = header.findChild(QWidget, "favorites_wrap")
+                if fav_wrap:
+                    self._render_favorites(fav_wrap)
+
+        # 3) Direkt in das gewählte Verzeichnis wechseln
+        if hasattr(self, "enter_directory") and callable(self.enter_directory):
+            self.enter_directory(path)
+        else:
+            self.current_path = path
+            if hasattr(self, "refresh") and callable(self.refresh):
+                self.refresh()
 
     def init_button_state(self):
         self.current_path = os.path.abspath(self.SCRIPT_FOLDER)
@@ -217,6 +368,8 @@ class ButtonContentMixin:
         except Exception:
             print("Fehler beim Verbinden des Watchersignals:", traceback.format_exc())
         self.plugin_loader = None
+        self._load_favorites()
+
 
     def set_plugin_loader(self, loader_callable):
         self.plugin_loader = loader_callable
@@ -233,6 +386,9 @@ class ButtonContentMixin:
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setAlignment(Qt.AlignTop)
+        # ... dein bisheriges setup/clear des Layouts ...
+        self._ensure_header_controls(layout)
+
         if hasattr(self, "watcher"):
             try:
                 paths = self.watcher.directories()
@@ -348,82 +504,42 @@ class ButtonContentMixin:
 
     def update_button_styles(self, layout):
         for i in range(layout.count()):
-            w = layout.itemAt(i).widget()
-            if w is None: continue
-
-            # Back-Button bleibt wie gehabt
             button = layout.itemAt(i).widget()
             if isinstance(button, QPushButton):
                 if button.objectName() == "back_button":
                     button.setMinimumHeight(40)
                     button.setStyleSheet(f"""
-                                    QPushButton {{
-                                        background-color: {'#666666' if is_dark() else '#BBBBBB'};
-                                        color: {'#FFFFFF' if is_dark() else '#000000'};
-                                        font-weight: bold;
-                                    }}
-                                    QPushButton:hover {{
-                                        background-color: {'#777777' if is_dark() else '#CCCCCC'};
-                                    }}
-                                """)
+                        QPushButton {{
+                            background-color: {'#666666' if is_dark() else '#BBBBBB'};
+                            color: {'#FFFFFF' if is_dark() else '#000000'};
+                            font-weight: bold;
+                        }}
+                        QPushButton:hover {{
+                            background-color: {'#777777' if is_dark() else '#CCCCCC'};
+                        }}
+                    """)
                 else:
                     entry_type = button.property("entry_type")
                     if entry_type == "folder":
                         button.setStyleSheet(f"""
-                                        QPushButton {{
-                                            background-color: {'#3A4A6A' if is_dark() else '#c2d1ff'};
-                                            color: {'#FFFFFF' if is_dark() else '#000000'};
-                                        }}
-                                        QPushButton:hover {{
-                                            background-color: {'#4B5B6B' if is_dark() else '#a1b8ff'};
-                                        }}
-                                    """)
+                            QPushButton {{
+                                background-color: {'#3A4A6A' if is_dark() else '#c2d1ff'};
+                                color: {'#FFFFFF' if is_dark() else '#000000'};
+                            }}
+                            QPushButton:hover {{
+                                background-color: {'#4B5B6B' if is_dark() else '#a1b8ff'};
+                            }}
+                        """)
                     elif entry_type == "file":
                         button.setStyleSheet(f"""
-                                        QPushButton {{
-                                            background-color: {'#3A3A3A' if is_dark() else '#EEEEEE'};
-                                            color: {'#FFFFFF' if is_dark() else '#000000'};
-                                        }}
-                                        QPushButton:hover {{
-                                            background-color: {'#505050' if is_dark() else '#CCCCCC'};
-                                        }}
-                                    """)
-                continue
-
-            entry_type = w.property("entry_type")
-
-            # Ordner / normale Files (dein bisheriger Code für QPushButton)
-            if isinstance(w, QPushButton) and entry_type in ("folder", "file"):
-                if entry_type == "folder":
-                    w.setStyleSheet(f"""
-                        QPushButton {{
-                            background-color: {'#3A4A6A' if is_dark() else '#c2d1ff'};
-                            color: {'#FFFFFF' if is_dark() else '#000000'};
-                        }}
-                        QPushButton:hover {{ background-color: {'#4B5B6B' if is_dark() else '#a1b8ff'}; }}
-                    """)
-                elif entry_type == "file":
-                    w.setStyleSheet(f"""
-                        QPushButton {{
-                            background-color: {'#3A3A3A' if is_dark() else '#EEEEEE'};
-                            color: {'#FFFFFF' if is_dark() else '#000000'};
-                        }}
-                        QPushButton:hover {{ background-color: {'#505050' if is_dark() else '#CCCCCC'}; }}
-                    """)
-                continue
-
-            # Neu: Inline-HTML "Button" (ist ein QWidget)
-            if entry_type == "file_html_inline":
-                w.setStyleSheet(f"""
-                    QWidget {{
-                        background-color: {'#354A3A' if is_dark() else '#d5f0d9'};
-                        color: {'#FFFFFF' if is_dark() else '#000000'};
-                        border-radius: 6px;
-                    }}
-                    QWidget:hover {{
-                        background-color: {'#456A4B' if is_dark() else '#bfe8c6'};
-                    }}
-                """)
+                            QPushButton {{
+                                background-color: {'#3A3A3A' if is_dark() else '#EEEEEE'};
+                                color: {'#FFFFFF' if is_dark() else '#000000'};
+                            }}
+                            QPushButton:hover {{
+                                background-color: {'#505050' if is_dark() else '#CCCCCC'};
+                            }}
+                        """)
 
     def update_scrollbar_theme(self):
         if hasattr(self, "scroll_area") and self.scroll_area:
@@ -1091,7 +1207,9 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                         }}
                         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
                             background: none;
-                            height: 0add-page:vertical, QScrollBar::sub-page:vertical {{
+                            height: 0;
+                        }}
+                        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
                             background: none;
                         }}
                     """)
@@ -1386,7 +1504,6 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             cls = getattr(mod, "PluginWidget", None)
-            import time
             if cls is not None and isinstance(cls, type):
                 # Versuche, mode zu übergeben (einige Plugins erwarten mode)
                 try:
