@@ -79,7 +79,8 @@ def ensure_sample_plugin(script_root: str):
     entries = [e for e in os.listdir(script_root) if not e.startswith("_")]
     if entries:
         return
-    sample_path = os.path.join(script_root, "timer_plugin.py")
+    #sample_path = os.path.join(script_root, "timer_plugin.py")
+    sample_path = 2;
     sample_code = r'''from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout
 from PyQt5.QtCore import QTimer
 
@@ -678,6 +679,29 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         toolbar.addWidget(self.html_toolbar)
         toolbar.addStretch()
         toolbar.addWidget(self.search_input)  # ganz rechts
+
+        # --- Beenden-Button ---
+        self.exit_button = QPushButton("Beenden")
+        self.exit_button.setFixedHeight(max(28, int(self.height_size * 0.08)))
+        self.exit_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {'#aa3333' if is_dark() else '#ff5555'};
+                color: white;
+                font-weight: bold;
+                border: none;
+                border-radius: 10px;
+                padding: 6px 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {'#cc4444' if is_dark() else '#ff6666'};
+            }}
+        """)
+        # 🧠 Option 1: Sauber beenden
+        self.exit_button.clicked.connect(self.app.quit)
+        # 🧠 Option 2: Hartes Task-Ende (wenn z. B. Prozesse hängen)
+        # self.exit_button.clicked.connect(lambda: os._exit(0))
+
+        toolbar.addWidget(self.exit_button)
 
         tb = QWidget()
         tb.setLayout(toolbar)
