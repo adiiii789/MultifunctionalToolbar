@@ -352,8 +352,42 @@ class ButtonContentMixin:
             if w is None: continue
 
             # Back-Button bleibt wie gehabt
-            if isinstance(w, QPushButton) and w.objectName() == "back_button":
-                # ... (dein bestehender Stilcode) ...
+            button = layout.itemAt(i).widget()
+            if isinstance(button, QPushButton):
+                if button.objectName() == "back_button":
+                    button.setMinimumHeight(40)
+                    button.setStyleSheet(f"""
+                                    QPushButton {{
+                                        background-color: {'#666666' if is_dark() else '#BBBBBB'};
+                                        color: {'#FFFFFF' if is_dark() else '#000000'};
+                                        font-weight: bold;
+                                    }}
+                                    QPushButton:hover {{
+                                        background-color: {'#777777' if is_dark() else '#CCCCCC'};
+                                    }}
+                                """)
+                else:
+                    entry_type = button.property("entry_type")
+                    if entry_type == "folder":
+                        button.setStyleSheet(f"""
+                                        QPushButton {{
+                                            background-color: {'#3A4A6A' if is_dark() else '#c2d1ff'};
+                                            color: {'#FFFFFF' if is_dark() else '#000000'};
+                                        }}
+                                        QPushButton:hover {{
+                                            background-color: {'#4B5B6B' if is_dark() else '#a1b8ff'};
+                                        }}
+                                    """)
+                    elif entry_type == "file":
+                        button.setStyleSheet(f"""
+                                        QPushButton {{
+                                            background-color: {'#3A3A3A' if is_dark() else '#EEEEEE'};
+                                            color: {'#FFFFFF' if is_dark() else '#000000'};
+                                        }}
+                                        QPushButton:hover {{
+                                            background-color: {'#505050' if is_dark() else '#CCCCCC'};
+                                        }}
+                                    """)
                 continue
 
             entry_type = w.property("entry_type")
@@ -1057,9 +1091,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                         }}
                         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
                             background: none;
-                            height: 0;
-                        }}
-                        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                            height: 0add-page:vertical, QScrollBar::sub-page:vertical {{
                             background: none;
                         }}
                     """)
@@ -1354,6 +1386,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             cls = getattr(mod, "PluginWidget", None)
+            import time
             if cls is not None and isinstance(cls, type):
                 # Versuche, mode zu übergeben (einige Plugins erwarten mode)
                 try:
