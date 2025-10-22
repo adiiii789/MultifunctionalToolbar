@@ -1,13 +1,52 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Title</title>
-</head>
-<body>
-<button onclick="window.media && window.media.playPause()">⏯️</button>
-<button onclick="window.media && window.media.prev()">⏮️</button>
-<button onclick="window.media && window.media.next()">⏭️</button>
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Inline Media Controls</title>
+<style>
+    html, body { margin: 0; padding: 0; overflow: hidden !important; }
+  /* Falls irgendwo noch overflow:auto gesetzt ist, zusätzlich (Chromium/QtWebEngine): */
+  *::-webkit-scrollbar { width: 0 !important; height: 0 !important; }
+  :root { --gap: 6px; --pad: 6px; --bg: rgba(0,0,0,.06); }
+  @media (prefers-color-scheme: dark) { :root { --bg: rgba(255,255,255,.06); } }
+  html, body { margin: 0; padding: 0; /* overflow: hidden;  <-- aktivieren, wenn kein Scrollen gewünscht */ }
+  .toolbar {
+    position: sticky; top: 0; z-index: 9999;
+    display: flex; align-items: center; gap: var(--gap);
+    padding: var(--pad) calc(var(--pad) + 2px); background: var(--bg); backdrop-filter: blur(2px);
+  }
+  .toolbar button { padding: 4px 8px; font: 12px/1 system-ui, Arial; }
+  .content { padding: 8px; font: 13px/1.3 system-ui, Arial; }
+</style>
 
-</body>
-</html>
+<div class="toolbar">
+  <button title="Vorheriger" onclick="window.media?.prev()">⏮</button>
+  <button title="Play/Pause" onclick="window.media?.playPause()">⏯</button>
+  <button title="Nächster" onclick="window.media?.next()">⏭</button>
+  <button title="Stop" onclick="window.media?.stop()">⏹</button>
+  <button title="Leiser" onclick="window.media?.volDown()">🔉-</button>
+  <button title="Lauter" onclick="window.media?.volUp()">🔊+</button>
+  <button title="Mute" onclick="window.media?.mute()">🔇</button>
+</div>
+
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script>
+     ['wheel','touchmove'].forEach(evt => {
+    window.addEventListener(evt, e => e.preventDefault(), { passive: false });
+  });
+  window.addEventListener('keydown', e => {
+    const block = ['ArrowUp','ArrowDown','PageUp','PageDown',' '];
+    if (block.includes(e.key)) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+  new QWebChannel(qt.webChannelTransport, function (ch) {
+    window.media = ch.objects.media;
+    // Optional: Debug
+    // console.log('media ready?', !!window.media);
+  });
+
+  // Optional: Scroll hart deaktivieren (DOM-Ebene). Auskommentieren, wenn Scrollen erlaubt sein soll.
+  // ['wheel','touchmove'].forEach(evt => window.addEventListener(evt, e => e.preventDefault(), {passive:false}));
+  // window.addEventListener('keydown', e => {
+  //   const blocked = ['ArrowUp','ArrowDown','PageUp','PageDown',' '];
+  //   if (blocked.includes(e.key)) { e.preventDefault(); e.stopPropagation(); }
+  // }, true);
+</script>

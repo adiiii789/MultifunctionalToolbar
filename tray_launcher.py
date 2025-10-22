@@ -14,7 +14,6 @@ from PyQt5.QtCore import (
     Qt, QRect, QPoint, QFileSystemWatcher, QObject, pyqtSlot, QUrl, QPropertyAnimation, QEasingCurve, QEvent
 )
 
-
 try:
     from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings
     from PyQt5.QtWebChannel import QWebChannel
@@ -23,15 +22,7 @@ try:
 except Exception:
     WEBENGINE_AVAILABLE = False
 
-from screeninfo import get_monitors
-import ctypes
-
-# --- High DPI Scaling aktivieren ---
-QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
-QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
-# -----------------------------------
-# --- Windows Media Control Bridge ---
-from PyQt5.QtCore import pyqtSlot, QObject
+# --- Windows Media Control Bridge (for WebChannel) ---
 
 class MediaControlBridge(QObject):
     """Play/Pause/Next/Prev/Volume via WebChannel (Windows)."""
@@ -41,7 +32,6 @@ class MediaControlBridge(QObject):
         self._is_windows = (platform.system().lower() == "windows")
         if self._is_windows:
             import ctypes
-            self._ctypes = ctypes
             self._user32 = ctypes.windll.user32
             self.VK_MEDIA_NEXT_TRACK = 0xB0
             self.VK_MEDIA_PREV_TRACK = 0xB1
@@ -52,25 +42,119 @@ class MediaControlBridge(QObject):
             self.VK_VOLUME_UP        = 0xAF
 
     def _tap(self, vk):
-        if not getattr(self, "_is_windows", False): return
+        if not getattr(self, "_is_windows", False):
+            return
         KEYEVENTF_KEYUP = 0x0002
         self._user32.keybd_event(vk, 0, 0, 0)
         self._user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
 
     @pyqtSlot()
-    def playPause(self): self._tap(getattr(self, "VK_MEDIA_PLAY_PAUSE", 0))
+    def playPause(self): self._tap(self.VK_MEDIA_PLAY_PAUSE)
     @pyqtSlot()
-    def next(self):      self._tap(getattr(self, "VK_MEDIA_NEXT_TRACK", 0))
+    def next(self):      self._tap(self.VK_MEDIA_NEXT_TRACK)
     @pyqtSlot()
-    def prev(self):      self._tap(getattr(self, "VK_MEDIA_PREV_TRACK", 0))
+    def prev(self):      self._tap(self.VK_MEDIA_PREV_TRACK)
     @pyqtSlot()
-    def stop(self):      self._tap(getattr(self, "VK_MEDIA_STOP", 0))
+    def stop(self):      self._tap(self.VK_MEDIA_STOP)
     @pyqtSlot()
-    def mute(self):      self._tap(getattr(self, "VK_VOLUME_MUTE", 0))
+    def mute(self):      self._tap(self.VK_VOLUME_MUTE)
     @pyqtSlot()
-    def volUp(self):     self._tap(getattr(self, "VK_VOLUME_UP", 0))
+    def volUp(self):     self._tap(self.VK_VOLUME_UP)
     @pyqtSlot()
-    def volDown(self):   self._tap(getattr(self, "VK_VOLUME_DOWN", 0))
+    def volDown(self):   self._tap(self.VK_VOLUME_DOWN)
+
+class HtmlInlineButton(QWidget):
+    """
+    Zeigt eine HTML-Datei inline. Keine Injektion, kein Scroll-Blocking.
+    Die HTML-Seite selbst bringt Toolbar/Styling/JS mit.
+    """
+    def __init__(self, path: str = None, title_text: str = None,
+                 min_height: int = 160, compact: bool = False, **kwargs):
+        super().__init__()
+
+        # Back-compat alias
+        if path is None:
+            path = kwargs.pop("html_path", None)
+        if path is None:
+            raise ValueError("HtmlInlineButton requires 'path' (or 'html_path').")
+
+        self.setProperty("entry_type", "file_html_inline")
+        self.html_path = os.path.abspath(path)
+
+        # Relative Zielhöhe anhand QPushButton sizeHint
+        probe = QPushButton("Wg"); probe.setFont(self.font())
+        base_h = max(28, probe.sizeHint().height())
+        factor = 0.85 if compact else 1.10    # leicht kompakter im Popup
+        target_h = int(base_h * (1.6 if not self.html_path.lower().endswith(".html") else 2.0) * factor)
+
+        self.setMinimumHeight(target_h)
+        self.setMaximumHeight(target_h)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, max(4, target_h//10), 8, max(4, target_h//10))
+        outer.setSpacing(0)
+
+        if WEBENGINE_AVAILABLE:
+            try:
+                self.view = QWebEngineView(self)
+                try:
+                    self.view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
+                except Exception:
+                    pass
+                self.view.installEventFilter(self)
+                self.view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                self.view.setFixedHeight(max(40, target_h - (outer.contentsMargins().top() + outer.contentsMargins().bottom())))
+                outer.addWidget(self.view)
+
+                # Nur WebChannel registrieren (damit HTML 'window.media' verwenden kann)
+                self.channel = QWebChannel(self.view.page())
+                self.media = MediaControlBridge(self)
+                self.channel.registerObject("media", self.media)
+                self.view.page().setWebChannel(self.channel)
+
+                if self.html_path.lower().endswith(".html"):
+                    # Original-HTML laden – HTML ist für Toolbar/Scroll etc. zuständig
+                    self.view.load(QUrl.fromLocalFile(self.html_path))
+                else:
+                    # Nicht-HTML: nur als <pre> zeigen (ohne Toolbar/JS)
+                    try:
+                        with open(self.html_path, "r", encoding="utf-8", errors="replace") as f:
+                            raw = f.read()
+                    except Exception as e:
+                        raw = f"Fehler beim Lesen: {e}"
+                    esc = (raw.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
+                    html = f"<!doctype html><meta charset='utf-8'><pre style='margin:0;padding:8px;font:13px/1.3 monospace;'>{esc}</pre>"
+                    self.view.setHtml(html, baseUrl=QUrl.fromLocalFile(os.path.dirname(self.html_path)))
+
+            except Exception:
+                self._fallback_area(outer)
+        else:
+            self._fallback_area(outer)
+
+    def _fallback_area(self, outer_layout: QVBoxLayout):
+        btn = QPushButton("Im Browser öffnen")
+        btn.clicked.connect(lambda: __import__("webbrowser").open('file://' + self.html_path))
+        outer_layout.addWidget(btn)
+
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, "view", None):
+            et = event.type()
+            if et in (QEvent.Wheel, QEvent.Gesture, QEvent.NativeGesture):
+                return True
+            if et == QEvent.KeyPress:
+                key = getattr(event, "key", lambda: None)()
+                if key in {Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown, Qt.Key_Space}:
+                    return True
+        return super().eventFilter(obj, event)
+
+
+from screeninfo import get_monitors
+import ctypes
+
+# --- High DPI Scaling aktivieren ---
+QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+# -----------------------------------
 
 # --- Globale Theme-Variable ---
 theme = "dark"
@@ -121,8 +205,7 @@ def ensure_sample_plugin(script_root: str):
     entries = [e for e in os.listdir(script_root) if not e.startswith("_")]
     if entries:
         return
-    #sample_path = os.path.join(script_root, "timer_plugin.py")
-    sample_path = 2;
+    sample_path = os.path.join(script_root, "timer_plugin.py")
     sample_code = r'''from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout
 from PyQt5.QtCore import QTimer
 
@@ -200,12 +283,35 @@ class PluginWidget(QWidget):
 
 
 class ButtonContentMixin:
-    SCRIPT_FOLDER = "scripts"
-    # --- Favoriten (persistente Verzeichnisse) ---
+    # --- Favorites & path utils ---
+    def _base_dir(self) -> str:
+        return os.path.abspath(getattr(self, "SCRIPT_FOLDER", "scripts"))
+
+    def _default_dir(self) -> str:
+        return self._base_dir()
+
     def _favorites_store_path(self):
-        # Im scripts-Ordner als "versteckte" Datei – wird nicht gelistet, da dein Code _* skippt
-        root = os.path.abspath(self.SCRIPT_FOLDER)
-        return os.path.join(root, "_folders.json")
+        return os.path.join(self._base_dir(), "_folders.json")
+
+    def _resolve_path(self, p: str) -> str:
+        if not p: return None
+        p = os.path.expanduser(p.strip())
+        if os.path.isabs(p): return os.path.abspath(p)
+        cur = getattr(self, "current_path", None)
+        base = os.path.abspath(cur) if cur else self._base_dir()
+        return os.path.abspath(os.path.normpath(os.path.join(base, p)))
+
+    def _to_storable(self, abs_path: str) -> str:
+        abs_path = os.path.abspath(abs_path)
+        base = self._base_dir()
+        try:
+            rel = os.path.relpath(abs_path, base)
+            if not rel.startswith(".."):
+                rel = rel.replace("\\", "/")
+                return "./" + rel if not rel.startswith("./") else rel
+        except Exception:
+            pass
+        return abs_path
 
     def _load_favorites(self):
         self._favorite_dirs = []
@@ -215,46 +321,99 @@ class ButtonContentMixin:
             if os.path.exists(p):
                 with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f) or []
-                    # Nur existierende Pfade behalten
-                    self._favorite_dirs = [d for d in data if isinstance(d, str) and os.path.isdir(d)]
+                for item in data:
+                    if isinstance(item, str):
+                        ap = self._resolve_path(item)
+                        if ap and os.path.isdir(ap):
+                            self._favorite_dirs.append(ap)
         except Exception:
-            self._favorite_dirs = []
+            print("Favoriten laden fehlgeschlagen:", traceback.format_exc())
 
     def _save_favorites(self):
         try:
             import json
             p = self._favorites_store_path()
             os.makedirs(os.path.dirname(p), exist_ok=True)
+            store = [self._to_storable(d) for d in self._favorite_dirs if os.path.isdir(d)]
             with open(p, "w", encoding="utf-8") as f:
-                json.dump(self._favorite_dirs, f, ensure_ascii=False, indent=2)
+                json.dump(store, f, ensure_ascii=False, indent=2)
         except Exception:
             print("Favoriten konnten nicht gespeichert werden:", traceback.format_exc())
 
     def _ensure_in_favorites(self, path):
         path = os.path.abspath(path)
+        if not hasattr(self, "_favorite_dirs"):
+            self._load_favorites()
         if path not in self._favorite_dirs:
             self._favorite_dirs.append(path)
             self._save_favorites()
 
     def _remove_from_favorites(self, path):
         path = os.path.abspath(path)
+        if not hasattr(self, "_favorite_dirs"):
+            self._load_favorites()
         if path in self._favorite_dirs:
             self._favorite_dirs.remove(path)
             self._save_favorites()
 
+    def _render_favorites(self, container: QWidget):
+        if container is None: return
+        lay = container.layout()
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w: w.setParent(None)
+
+        if not hasattr(self, "_favorite_dirs"):
+            self._load_favorites()
+
+        default_path = os.path.abspath(self._default_dir())
+
+        def _add_chip(path: str, removable: bool):
+            row = QWidget()
+            hl = QHBoxLayout(row)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(4)
+
+            name = os.path.basename(path.rstrip("\\/")) or path
+            b = QPushButton(name)
+            b.setToolTip(path)
+            b.setMinimumHeight(28)
+            b.clicked.connect(lambda _, p=path: self.enter_directory(p))
+            if removable:
+                b.setObjectName("fav_btn"); b.setProperty("entry_type", "favorite")
+            else:
+                b.setObjectName("fav_btn_default"); b.setProperty("entry_type", "favorite_default")
+            hl.addWidget(b)
+
+            if removable:
+                x = QPushButton("✕")
+                x.setObjectName("fav_remove_btn")
+                x.setToolTip("Aus Favoriten entfernen")
+                x.setFixedSize(24, 24)
+                x.clicked.connect(lambda _, p=path, c=container: self._on_remove_favorite(p, c))
+                hl.addWidget(x)
+
+            lay.addWidget(row)
+
+        _add_chip(default_path, removable=False)
+        for p in self._favorite_dirs:
+            ap = os.path.abspath(p)
+            if ap != default_path and os.path.isdir(ap):
+                _add_chip(ap, removable=True)
+
+    def _on_remove_favorite(self, path, container):
+        if os.path.abspath(path) == os.path.abspath(self._default_dir()):
+            return
+        self._remove_from_favorites(path)
+        self._render_favorites(container)
+
     def _ensure_header_controls(self, layout):
-        """
-        Header über der Dateiliste:
-        - Button: '＋ Ordner hinzufügen'
-        - Rechts: Favoriten-Shortcuts (persistente Verzeichnisse), inkl. Entfernen
-        """
         header = None
         for i in range(layout.count()):
             w = layout.itemAt(i).widget()
             if w and w.objectName() == "files_header_controls":
-                header = w
-                break
-
+                header = w; break
         if header is None:
             header = QWidget()
             header.setObjectName("files_header_controls")
@@ -264,93 +423,43 @@ class ButtonContentMixin:
 
             btn_add = QPushButton("＋ Ordner hinzufügen")
             btn_add.setObjectName("btn_add_folder")
-            btn_add.setToolTip("Weiteres Verzeichnis auswählen und öffnen")
+            btn_add.setToolTip("Verzeichnis wählen (Dialog)")
             btn_add.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn_add.clicked.connect(self._add_directory_via_dialog)
             h.addWidget(btn_add)
 
-            # Platz für Favoriten rechts
             fav_wrap = QWidget()
             fav_wrap.setObjectName("favorites_wrap")
             fav_layout = QHBoxLayout(fav_wrap)
             fav_layout.setContentsMargins(0, 0, 0, 0)
             fav_layout.setSpacing(6)
-            h.addWidget(fav_wrap, 1)
+            h.addWidget(fav_wrap)
 
             layout.insertWidget(0, header)
-
-        # Favoritenleiste neu rendern
         self._render_favorites(header.findChild(QWidget, "favorites_wrap"))
-    def _render_favorites(self, container: QWidget):
-        # Container leeren
-        lay = container.layout()
-        while lay.count():
-            item = lay.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-
-        # Falls noch nicht geladen:
-        if not hasattr(self, "_favorite_dirs"):
-            self._load_favorites()
-
-        # Für jeden Favoriten einen kleinen Button + Entfernen-Icon
-        for path in self._favorite_dirs:
-            row = QWidget()
-            hl = QHBoxLayout(row)
-            hl.setContentsMargins(0, 0, 0, 0)
-            hl.setSpacing(4)
-
-            name = os.path.basename(path.rstrip("\\/")) or path
-            b = QPushButton(name)
-            b.setToolTip(path)
-            b.setObjectName("fav_btn")
-            b.setProperty("entry_type", "favorite")
-            b.setMinimumHeight(28)
-            b.clicked.connect(lambda _, p=path: self.enter_directory(p))
-            hl.addWidget(b)
-
-            x = QPushButton("✕")
-            x.setObjectName("fav_remove_btn")
-            x.setToolTip("Aus Favoriten entfernen")
-            x.setFixedSize(24, 24)
-            x.clicked.connect(lambda _, p=path, c=container: self._on_remove_favorite(p, c))
-            hl.addWidget(x)
-
-            lay.addWidget(row)
-    def _on_remove_favorite(self, path, container):
-        self._remove_from_favorites(path)
-        self._render_favorites(container)
 
     def _add_directory_via_dialog(self):
         start_dir = getattr(self, "current_path", None) or os.path.expanduser("~")
         path = QFileDialog.getExistingDirectory(self, "Verzeichnis auswählen", start_dir)
-        if not path:
-            return
-
-        # 1) In Favoriten aufnehmen (persistiert in scripts/_folders.json)
+        if not path: return
         self._ensure_in_favorites(path)
-
-        # 2) Favoriten-Leiste sofort aktualisieren
         if hasattr(self, "layout"):
             header = None
             for i in range(self.layout.count()):
                 w = self.layout.itemAt(i).widget()
                 if w and w.objectName() == "files_header_controls":
-                    header = w
-                    break
+                    header = w; break
             if header:
                 fav_wrap = header.findChild(QWidget, "favorites_wrap")
-                if fav_wrap:
-                    self._render_favorites(fav_wrap)
-
-        # 3) Direkt in das gewählte Verzeichnis wechseln
+                if fav_wrap: self._render_favorites(fav_wrap)
         if hasattr(self, "enter_directory") and callable(self.enter_directory):
             self.enter_directory(path)
         else:
             self.current_path = path
             if hasattr(self, "refresh") and callable(self.refresh):
                 self.refresh()
+
+    SCRIPT_FOLDER = "scripts"
 
     def init_button_state(self):
         self.current_path = os.path.abspath(self.SCRIPT_FOLDER)
@@ -368,8 +477,6 @@ class ButtonContentMixin:
         except Exception:
             print("Fehler beim Verbinden des Watchersignals:", traceback.format_exc())
         self.plugin_loader = None
-        self._load_favorites()
-
 
     def set_plugin_loader(self, loader_callable):
         self.plugin_loader = loader_callable
@@ -377,18 +484,19 @@ class ButtonContentMixin:
     def on_directory_changed(self, path):
         self.add_buttons(self.layout)
 
+    
     def add_buttons(self, layout):
+        # clear existing
         for i in reversed(range(layout.count())):
-            item = layout.itemAt(i)
-            widget = item.widget() if item else None
-            if widget:
-                widget.setParent(None)
+            it = layout.itemAt(i)
+            w = it.widget() if it else None
+            if w: w.setParent(None)
+
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setAlignment(Qt.AlignTop)
-        # ... dein bisheriges setup/clear des Layouts ...
-        self._ensure_header_controls(layout)
 
+        # watcher
         if hasattr(self, "watcher"):
             try:
                 paths = self.watcher.directories()
@@ -397,76 +505,77 @@ class ButtonContentMixin:
                     self.watcher.addPath(self.current_path)
             except Exception:
                 print("Fehler beim Aktualisieren des Watchers:", traceback.format_exc())
+
+        # back button
         if self.current_path != os.path.abspath(self.SCRIPT_FOLDER):
             back_button = QPushButton("← Zurück")
             back_button.clicked.connect(self.go_back)
             back_button.setObjectName("back_button")
             layout.addWidget(back_button)
+
+        # header only if not popup
+        if not getattr(self, "IS_POPUP", False):
+            self._ensure_header_controls(layout)
+
+        # list entries
         try:
             raw_entries = os.listdir(self.current_path)
         except Exception:
             raw_entries = []
-
-        # NUR sichtbare Einträge und ohne Leading "_"
         filtered = [e for e in raw_entries if not e.startswith("_")]
 
         def group_key(name: str):
             nl = name.lower()
             full = os.path.join(self.current_path, name)
-            # Prioritäten: 0=[HTML]*, 1=.html, 2=.py, 3=Ordner, 4=sonstiges
-            if nl.startswith("[html]"):
-                return (0, nl)
-            if nl.endswith(".html"):
-                return (1, nl)
-            if nl.endswith(".py"):
-                return (2, nl)
-            if os.path.isdir(full):
-                return (3, nl)
+            if nl.startswith("[html]"):  return (0, nl)
+            if nl.endswith(".html"):     return (1, nl)
+            if nl.endswith(".py"):       return (2, nl)
+            if os.path.isdir(full):      return (3, nl)
             return (4, nl)
 
         entries = sorted(filtered, key=group_key)
+        is_popup = getattr(self, "IS_POPUP", False)
 
         for entry in entries:
             full_path = os.path.join(self.current_path, entry)
             try:
                 if os.path.isdir(full_path):
-                    button = QPushButton(entry)
-                    button.clicked.connect(lambda _, p=full_path: self.enter_directory(p))
-                    button.setProperty("entry_type", "folder")
+                    b = QPushButton(entry)
+                    b.clicked.connect(lambda _, p=full_path: self.enter_directory(p))
+                    b.setProperty("entry_type", "folder")
+                    b.setMinimumHeight(60 if not is_popup else 48)
+                    b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                    layout.addWidget(b)
+                    continue
 
-                else:
-                    name = entry
-                    lower = name.lower()
-                    is_html_prefix = lower.startswith("[html]")
-
-                    if is_html_prefix or lower.endswith(".html") or lower.endswith(".py"):
-                        if is_html_prefix:
-                            display_name = name[len("[HTML]"):].lstrip()
-                            # Inline-HTML-„Button“
-                            button = HtmlInlineButton(
-                                html_path=full_path,
-                                title_text=None,
-                                min_height=180
-                            )
-                            button.setProperty("entry_type", "file_html_inline")
-                            # kein clicked; Inhalt ist inline
-                        elif lower.endswith(".py"):
-                            display_name = name[:-3]
-                            button = QPushButton(display_name)
-                            button.clicked.connect(lambda _, p=full_path: self.run_script(p))
-                            button.setProperty("entry_type", "file")
-                        else:  # klassisches .html ohne Präfix -> wie gehabt extern/Container
-                            display_name = name
-                            button = QPushButton(display_name)
-                            button.clicked.connect(lambda _, p=full_path: self.run_script(p))
-                            button.setProperty("entry_type", "file")
+                lower = entry.lower()
+                is_html_prefix = lower.startswith("[html]")
+                if is_html_prefix or lower.endswith(".html") or lower.endswith(".py"):
+                    if is_html_prefix:
+                        card = HtmlInlineButton(
+                            html_path=full_path,
+                            title_text=None,
+                            min_height=180,
+                            compact=is_popup
+                        )
+                        card.setProperty("entry_type", "file_html_inline")
+                        layout.addWidget(card)
+                    elif lower.endswith(".py"):
+                        b = QPushButton(entry[:-3])
+                        b.clicked.connect(lambda _, p=full_path: self.run_script(p))
+                        b.setProperty("entry_type", "file")
+                        b.setMinimumHeight(60 if not is_popup else 48)
+                        b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                        layout.addWidget(b)
                     else:
-                        continue
-
-                # Gemeinsame Button-Dimensionen
-                button.setMinimumHeight(60)
-                button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-                layout.addWidget(button)
+                        b = QPushButton(entry)
+                        b.clicked.connect(lambda _, p=full_path: self.run_script(p))
+                        b.setProperty("entry_type", "file")
+                        b.setMinimumHeight(60 if not is_popup else 48)
+                        b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                        layout.addWidget(b)
+                else:
+                    continue
             except Exception:
                 print("Fehler beim Erstellen eines Buttons:", traceback.format_exc())
 
@@ -540,6 +649,20 @@ class ButtonContentMixin:
                                 background-color: {'#505050' if is_dark() else '#CCCCCC'};
                             }}
                         """)
+            else:
+                # Inline-HTML widget styling
+                if button and button.property("entry_type") == "file_html_inline":
+                    button.setStyleSheet(f"""
+                        QWidget {{
+                            background-color: {'#354A3A' if is_dark() else '#d5f0d9'};
+                            color: {'#FFFFFF' if is_dark() else '#000000'};
+                            border-radius: 8px;
+                            padding: 8px;
+                        }}
+                        QWidget:hover {{
+                            background-color: {'#456A4B' if is_dark() else '#bfe8c6'};
+                        }}
+                    """)
 
     def update_scrollbar_theme(self):
         if hasattr(self, "scroll_area") and self.scroll_area:
@@ -601,213 +724,12 @@ class HtmlPluginContainer(QWidget):
                 webbrowser.open('file://' + os.path.abspath(html_path))
 
             open_btn.clicked.connect(_open2)
-class HtmlInlineButton(QWidget):
-    """
-    Inline-Container, der eine HTML-Datei direkt im Button-Bereich anzeigt.
-    - Ohne Banner/Dateinamen
-    - Mit Top-Leiste (Media-Buttons) direkt oben
-    - Bei .html-Dateien wird die Leiste per JS in das Dokument eingefügt (sticky)
-    """
-    def __init__(self, html_path: str, title_text: str = None, min_height: int = 160):
-        super().__init__()
-        self.setProperty("entry_type", "file_html_inline")
-        self.html_path = os.path.abspath(html_path)
-        self.setMinimumHeight(min_height)
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 8, 8)
-        outer.setSpacing(0)  # keine zusätzliche Lücke oben
-
-        if WEBENGINE_AVAILABLE:
-            try:
-                self.view = QWebEngineView(self)
-                # Scrollbars aus und Scroll-Input blockieren
-                try:
-                    self.view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
-                except Exception:
-                    pass
-
-                self.view.installEventFilter(self)  # Mausrad + Keys abfangen
-
-                outer.addWidget(self.view)
-
-                # WebChannel für Mediensteuerung
-                ch = QWebChannel(self.view.page())
-                self.media = MediaControlBridge(self)
-                ch.registerObject("media", self.media)
-                self.view.page().setWebChannel(ch)
-
-                if self.html_path.lower().endswith(".html"):
-                    # Original-HTML laden
-                    self.view.load(QUrl.fromLocalFile(self.html_path))
-
-                    def inject(_ok):
-                        # 1) qwebchannel.js laden und window.media bereitstellen
-                        # 2) Eine Top-Bar (sticky) über den Dokumentinhalt setzen
-                        js = r"""
-                        
-(function(){
-  // qwebchannel
-  var s=document.createElement('script');
-  s.src='qrc:///qtwebchannel/qwebchannel.js';
-  s.onload=function(){
-    new QWebChannel(qt.webChannelTransport, function(ch){
-      window.media = ch.objects.media;
-
-      // Toolbar erstellen
-      var bar = document.createElement('div');
-      bar.setAttribute('id','__inline_toolbar__');
-      bar.innerHTML = `
-        <style>
-        html, body { overflow: hidden !important; }
-          #__inline_toolbar__ {
-            position: sticky; top: 0; z-index: 9999;
-            background: rgba(0,0,0,0.06);
-            backdrop-filter: blur(2px);
-            padding: 6px 8px; margin: 0 0 8px 0;
-            display: flex; gap: 6px; align-items: center;
-          }
-          #__inline_toolbar__ button { padding: 6px 10px; }
-          @media (prefers-color-scheme: dark) {
-            #__inline_toolbar__ { background: rgba(255,255,255,0.06); }
-          }
-        </style>
-        <button onclick="window.media && window.media.prev()">⏮</button>
-        <button onclick="window.media && window.media.playPause()">⏯</button>
-        <button onclick="window.media && window.media.next()">⏭</button>
-        <button onclick="window.media && window.media.stop()">⏹</button>
-        <button onclick="window.media && window.media.mute()">🔇</button>
-        <button onclick="window.media && window.media.volDown()">🔉-</button>
-        <button onclick="window.media && window.media.volUp()">🔊+</button>
-      `;
-      // Ganz oben einfügen
-      window.addEventListener('wheel', e => e.preventDefault(), {passive:false});
-window.addEventListener('touchmove', e => e.preventDefault(), {passive:false});
-
-      var body = document.body || document.documentElement;
-      if (body.firstChild) body.insertBefore(bar, body.firstChild);
-      else body.appendChild(bar);
-    });
-  };
-  document.head.appendChild(s);
-})();
-"""
-                        css_hide_overflow = """
-                        window.addEventListener('wheel', e => e.preventDefault(), {passive:false});
-window.addEventListener('touchmove', e => e.preventDefault(), {passive:false});
-
-                        (function(){
-                          var st = document.createElement('style');
-                          st.textContent = 'html,body{overflow:hidden!important;}';
-                          document.head.appendChild(st);
-                        })();
-                        """
-                        self.view.page().runJavaScript(css_hide_overflow)
-                        try:
-                            self.view.page().runJavaScript(js)
-                        except Exception:
-                            pass
-
-                    self.view.loadFinished.connect(inject)
-
-                else:
-                    # Nicht-HTML: Inhalt als <pre> rendern mit Toolbar OBEN
-                    try:
-                        with open(self.html_path, "r", encoding="utf-8", errors="replace") as f:
-                            raw = f.read()
-                    except Exception as e:
-                        raw = f"Fehler beim Lesen: {e}"
-
-                    esc = (raw.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
-                    html = f"""<!doctype html><meta charset="utf-8">
-<style>
-  body {{
-    font-family: system-ui, Arial; margin: 0; padding: 0;
-  }}
-  .topbar {{
-    position: sticky; top: 0; z-index: 9999;
-    background: rgba(0,0,0,0.06);
-    backdrop-filter: blur(2px);
-    padding: 6px 8px; margin: 0;
-    display: flex; gap: 6px; align-items: center;
-  }}
-  @media (prefers-color-scheme: dark) {{
-    .topbar {{ background: rgba(255,255,255,0.06); }}
-  }}
-  .content {{
-    padding: 8px;
-  }}
-  pre {{
-    white-space: pre-wrap; word-wrap: break-word; font-size: 13px; margin: 0;
-  }}
-  button {{ padding:6px 10px; }}
-</style>
-
-<div class="topbar">
-  <button onclick="window.media && window.media.prev()">⏮</button>
-  <button onclick="window.media && window.media.playPause()">⏯</button>
-  <button onclick="window.media && window.media.next()">⏭</button>
-  <button onclick="window.media && window.media.stop()">⏹</button>
-  <button onclick="window.media && window.media.mute()">🔇</button>
-  <button onclick="window.media && window.media.volDown()">🔉-</button>
-  <button onclick="window.media && window.media.volUp()">🔊+</button>
-</div>
-<div class="content">
-  <pre>{esc}</pre>
-</div>
-
-<script>
-  // WebChannel nachladen, damit window.media funktioniert
-  (function(){{
-    var s=document.createElement('script');
-    s.src='qrc:///qtwebchannel/qwebchannel.js';
-    s.onload=function(){{
-      new QWebChannel(qt.webChannelTransport, function(ch){{
-        window.media = ch.objects.media;
-      }});
-    }};
-    document.head.appendChild(s);
-  }})();
-</script>
-"""
-                    self.view.setHtml(html, baseUrl=QUrl.fromLocalFile(os.path.dirname(self.html_path)))
-
-            except Exception:
-                self._fallback_area(outer)
-        else:
-            self._fallback_area(outer)
-
-    def _fallback_area(self, outer_layout: QVBoxLayout):
-        # Minimaler Fallback ohne Banner – nur Hinweis + Button
-        box = QVBoxLayout()
-        box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(6)
-        msg = QLabel("PyQtWebEngine nicht verfügbar. Datei im Browser öffnen.")
-        btn = QPushButton("Im Standardbrowser öffnen")
-        btn.clicked.connect(lambda: __import__("webbrowser").open('file://' + self.html_path))
-        container = QWidget()
-        container.setLayout(box)
-        box.addWidget(msg)
-        box.addWidget(btn)
-        outer_layout.addWidget(container)
-
-    def eventFilter(self, obj, event):
-        # Blockiere Scrollen per Mausrad, Touch, Pfeiltasten, PageUp/Down, Space
-        if obj is getattr(self, "view", None):
-            et = event.type()
-            if et in (QEvent.Wheel, QEvent.Gesture, QEvent.NativeGesture):
-                return True
-            if et == QEvent.KeyPress:
-                key = getattr(event, "key", lambda: None)()
-                blocked = {Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown, Qt.Key_Space}
-                if key in blocked:
-                    return True
-        return super().eventFilter(obj, event)
 
 
 class PopupWindow(ButtonContentMixin, QWidget):
     def __init__(self, app=None):
         super().__init__()
+        self.IS_POPUP = True
         self.app = app
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
         self.channel = QWebChannel()
@@ -1121,29 +1043,6 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         toolbar.addWidget(self.html_toolbar)
         toolbar.addStretch()
         toolbar.addWidget(self.search_input)  # ganz rechts
-
-        # --- Beenden-Button ---
-        self.exit_button = QPushButton("Beenden")
-        self.exit_button.setFixedHeight(max(28, int(self.height_size * 0.08)))
-        self.exit_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {'#aa3333' if is_dark() else '#ff5555'};
-                color: white;
-                font-weight: bold;
-                border: none;
-                border-radius: 10px;
-                padding: 6px 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {'#cc4444' if is_dark() else '#ff6666'};
-            }}
-        """)
-        # 🧠 Option 1: Sauber beenden
-        self.exit_button.clicked.connect(self.app.quit)
-        # 🧠 Option 2: Hartes Task-Ende (wenn z. B. Prozesse hängen)
-        # self.exit_button.clicked.connect(lambda: os._exit(0))
-
-        toolbar.addWidget(self.exit_button)
 
         tb = QWidget()
         tb.setLayout(toolbar)
