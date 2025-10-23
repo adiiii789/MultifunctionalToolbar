@@ -97,6 +97,8 @@ class HtmlInlineButton(QWidget):
         if WEBENGINE_AVAILABLE:
             try:
                 self.view = QWebEngineView(self)
+                self.view.setAttribute(Qt.WA_TranslucentBackground, True)
+                self.view.page().setBackgroundColor(Qt.transparent)
                 try:
                     self.view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
                 except Exception:
