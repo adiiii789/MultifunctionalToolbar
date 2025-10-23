@@ -65,8 +65,12 @@ class MediaControlBridge(QObject):
 
 class HtmlInlineButton(QWidget):
     """
-    Zeigt eine HTML-Datei inline. Keine Injektion, kein Scroll-Blocking.
-    Die HTML-Seite selbst bringt Toolbar/Styling/JS mit.
+    Zeigt Inline-UI im Button:
+    - Unterstützt Dateien mit Präfix [HTML] sowohl als .html (geladen) als auch als .py (liefert HTML-String).
+    - .py-Datei muss eine Funktion get_inline_html(mode: str) -> str bereitstellen.
+    - mode = "popup" (compact=True) oder "window".
+    - Scroll/Zoom-Eingaben (Wheel/Gesten/CTRL+Zoom/Keys) auf Qt-Ebene deaktiviert.
+    - Stellt WebChannel-Objekt 'media' für window.media bereit (Mediatasten).
     """
     def __init__(self, path: str = None, title_text: str = None,
                  min_height: int = 160, compact: bool = False, **kwargs):
@@ -79,19 +83,25 @@ class HtmlInlineButton(QWidget):
             raise ValueError("HtmlInlineButton requires 'path' (or 'html_path').")
 
         self.setProperty("entry_type", "file_html_inline")
-        self.html_path = os.path.abspath(path)
+        self.src_path = os.path.abspath(path)
+        self.compact = compact
 
-        # Relative Zielhöhe anhand QPushButton sizeHint
-        probe = QPushButton("Wg"); probe.setFont(self.font())
+        # Zielhöhe relativ zur nativen Buttonhöhe (DPI/Theme-sicher)
+        probe = QPushButton("Wg")
+        probe.setFont(self.font())
         base_h = max(28, probe.sizeHint().height())
-        factor = 0.85 if compact else 1.10    # leicht kompakter im Popup
-        target_h = int(base_h * (1.6 if not self.html_path.lower().endswith(".html") else 2.0) * factor)
+        factor = 1.30 if not compact else 1.12   # Window größer, Popup kompakter
+        target_h = int(base_h * factor)
+
+        # Außenmargen schlank
+        outer_top = max(4, target_h // 8)
+        outer_bot = max(4, target_h // 8)
 
         self.setMinimumHeight(target_h)
         self.setMaximumHeight(target_h)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, max(4, target_h//10), 8, max(4, target_h//10))
+        outer.setContentsMargins(8, outer_top, 8, outer_bot)
         outer.setSpacing(0)
 
         if WEBENGINE_AVAILABLE:
@@ -99,45 +109,109 @@ class HtmlInlineButton(QWidget):
                 self.view = QWebEngineView(self)
                 self.view.setAttribute(Qt.WA_TranslucentBackground, True)
                 self.view.page().setBackgroundColor(Qt.transparent)
+
+                # Scrollbars aus
                 try:
                     self.view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
+                    self.view.page().settings().setAttribute(QWebEngineSettings.FullScreenSupportEnabled, False)
                 except Exception:
                     pass
-                self.view.installEventFilter(self)
-                self.view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-                self.view.setFixedHeight(max(40, target_h - (outer.contentsMargins().top() + outer.contentsMargins().bottom())))
-                outer.addWidget(self.view)
 
-                # Nur WebChannel registrieren (damit HTML 'window.media' verwenden kann)
+                # Höhe exakt an Container anpassen
+                self.view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                self.view.setFixedHeight(max(24, target_h - (outer_top + outer_bot)))
+
+                # Scroll/Zoom auf Qt-Ebene blocken
+                self.view.installEventFilter(self)
+
+                # WebChannel registrieren (window.media in HTML nutzbar)
                 self.channel = QWebChannel(self.view.page())
                 self.media = MediaControlBridge(self)
                 self.channel.registerObject("media", self.media)
                 self.view.page().setWebChannel(self.channel)
 
-                if self.html_path.lower().endswith(".html"):
-                    # Original-HTML laden – HTML ist für Toolbar/Scroll etc. zuständig
-                    self.view.load(QUrl.fromLocalFile(self.html_path))
+                outer.addWidget(self.view)
+
+                # Render je nach Dateityp
+                mode_val = "popup" if compact else "window"
+                lower = self.src_path.lower()
+                if lower.endswith(".html"):
+                    # Lokale HTML mit ?mode=
+                    url = QUrl.fromLocalFile(self.src_path)
+                    if url.hasQuery():
+                        parts = [p for p in url.query().split("&") if not p.startswith("mode=")]
+                        parts.append(f"mode={mode_val}")
+                        url.setQuery("&".join(parts))
+                    else:
+                        url.setQuery(f"mode={mode_val}")
+                    self.view.load(url)
+
+                elif lower.endswith(".py"):
+                    # Python liefert HTML-String (get_inline_html(mode))
+                    html = self._load_inline_html_from_py(self.src_path, mode_val)
+                    # setHtml mit baseUrl für evtl. relative Assets
+                    base = QUrl.fromLocalFile(os.path.dirname(self.src_path) + os.sep)
+                    self.view.setHtml(html, baseUrl=base)
+
                 else:
-                    # Nicht-HTML: nur als <pre> zeigen (ohne Toolbar/JS)
+                    # Fallback: als Text anzeigen
                     try:
-                        with open(self.html_path, "r", encoding="utf-8", errors="replace") as f:
+                        with open(self.src_path, "r", encoding="utf-8", errors="replace") as f:
                             raw = f.read()
                     except Exception as e:
                         raw = f"Fehler beim Lesen: {e}"
-                    esc = (raw.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
+                    esc = (raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
                     html = f"<!doctype html><meta charset='utf-8'><pre style='margin:0;padding:8px;font:13px/1.3 monospace;'>{esc}</pre>"
-                    self.view.setHtml(html, baseUrl=QUrl.fromLocalFile(os.path.dirname(self.html_path)))
+                    base = QUrl.fromLocalFile(os.path.dirname(self.src_path) + os.sep)
+                    self.view.setHtml(html, baseUrl=base)
 
             except Exception:
+                print("HtmlInlineButton init error:", traceback.format_exc())
                 self._fallback_area(outer)
         else:
             self._fallback_area(outer)
 
-    def _fallback_area(self, outer_layout: QVBoxLayout):
-        btn = QPushButton("Im Browser öffnen")
-        btn.clicked.connect(lambda: __import__("webbrowser").open('file://' + self.html_path))
-        outer_layout.addWidget(btn)
+    def _load_inline_html_from_py(self, file_path: str, mode: str) -> str:
+        """Lädt Modul dynamisch und ruft get_inline_html(mode) -> str auf."""
+        try:
+            import importlib.util, types
+            spec = importlib.util.spec_from_file_location("inline_html_module", file_path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)  # type: ignore
+            fn = getattr(mod, "get_inline_html", None)
+            if not callable(fn):
+                return f"<!doctype html><meta charset='utf-8'><p style='margin:8px;color:#c00;'>Fehlende Funktion <code>get_inline_html(mode)</code> in {os.path.basename(file_path)}</p>"
+            html = fn(mode=mode)
+            if not isinstance(html, str):
+                return "<!doctype html><meta charset='utf-8'><p style='margin:8px;color:#c00;'>get_inline_html() muss einen String zurückgeben.</p>"
+            return self._wrap_no_scroll(html)
+        except Exception as e:
+            return f"<!doctype html><meta charset='utf-8'><pre style='margin:8px;color:#c00;'>Fehler in {os.path.basename(file_path)}:\n{traceback.format_exc()}</pre>"
 
+    def _wrap_no_scroll(self, inner_html: str) -> str:
+        """Sorgt dafür, dass die gelieferte HTML im Button höhenstabil bleibt & kein Scroll/Zoom zulässt."""
+        return f"""<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html,body{{margin:0;padding:0;height:100%;overflow:hidden!important;background:transparent}}
+  *{{box-sizing:border-box}}
+</style>
+{inner_html}
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script>
+  // WebChannel anbinden -> window.media.* nutzbar
+  new QWebChannel(qt.webChannelTransport, ch => {{ window.media = ch.objects.media; }});
+  // Scroll & Zoom in der Seite zusätzlich blocken
+  ['wheel','touchmove'].forEach(evt => window.addEventListener(evt, e => e.preventDefault(), {{passive:false}}));
+  window.addEventListener('keydown', e => {{
+    const blocked = ['ArrowUp','ArrowDown','PageUp','PageDown',' '];
+    if (e.ctrlKey || blocked.includes(e.key)) {{ e.preventDefault(); e.stopPropagation(); }}
+  }}, true);
+</script>
+"""
+
+    # Scroll/Zoom-Eingaben in der View blockieren
     def eventFilter(self, obj, event):
         if obj is getattr(self, "view", None):
             et = event.type()
@@ -145,9 +219,18 @@ class HtmlInlineButton(QWidget):
                 return True
             if et == QEvent.KeyPress:
                 key = getattr(event, "key", lambda: None)()
+                mods = getattr(event, "modifiers", lambda: 0)()
+                if mods & Qt.ControlModifier:
+                    return True
                 if key in {Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown, Qt.Key_Space}:
                     return True
         return super().eventFilter(obj, event)
+
+    def _fallback_area(self, outer_layout: QVBoxLayout):
+        btn = QPushButton("Im Browser öffnen")
+        btn.clicked.connect(lambda: __import__("webbrowser").open('file://' + self.src_path))
+        outer_layout.addWidget(btn)
+
 
 
 from screeninfo import get_monitors
@@ -536,6 +619,7 @@ class ButtonContentMixin:
             return (4, nl)
 
         entries = sorted(filtered, key=group_key)
+        # Buttons erzeugen
         is_popup = getattr(self, "IS_POPUP", False)
 
         for entry in entries:
@@ -552,32 +636,36 @@ class ButtonContentMixin:
 
                 lower = entry.lower()
                 is_html_prefix = lower.startswith("[html]")
-                if is_html_prefix or lower.endswith(".html") or lower.endswith(".py"):
-                    if is_html_prefix:
-                        card = HtmlInlineButton(
-                            html_path=full_path,
-                            title_text=None,
-                            min_height=180,
-                            compact=is_popup
-                        )
-                        card.setProperty("entry_type", "file_html_inline")
-                        layout.addWidget(card)
-                    elif lower.endswith(".py"):
-                        b = QPushButton(entry[:-3])
-                        b.clicked.connect(lambda _, p=full_path: self.run_script(p))
-                        b.setProperty("entry_type", "file")
-                        b.setMinimumHeight(60)
-                        b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-                        layout.addWidget(b)
-                    else:
-                        b = QPushButton(entry)
-                        b.clicked.connect(lambda _, p=full_path: self.run_script(p))
-                        b.setProperty("entry_type", "file")
-                        b.setMinimumHeight(60)
-                        b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-                        layout.addWidget(b)
-                else:
+
+                if is_html_prefix:
+                    # Inline anzeigen: unterstützt sowohl .html als auch .py
+                    card = HtmlInlineButton(
+                        html_path=full_path,
+                        title_text=None,
+                        compact=is_popup
+                    )
+                    card.setProperty("entry_type", "file_html_inline")
+                    layout.addWidget(card)
                     continue
+
+                if lower.endswith(".py"):
+                    b = QPushButton(entry[:-3])
+                    b.clicked.connect(lambda _, p=full_path: self.run_script(p))
+                    b.setProperty("entry_type", "file")
+                    b.setMinimumHeight(60)
+                    b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                    layout.addWidget(b)
+                    continue
+
+                if lower.endswith(".html"):
+                    b = QPushButton(entry)
+                    b.clicked.connect(lambda _, p=full_path: self.run_script(p))
+                    b.setProperty("entry_type", "file")
+                    b.setMinimumHeight(60)
+                    b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                    layout.addWidget(b)
+                    continue
+
             except Exception:
                 print("Fehler beim Erstellen eines Buttons:", traceback.format_exc())
 
