@@ -49,19 +49,32 @@ class MediaControlBridge(QObject):
         self._user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
 
     @pyqtSlot()
-    def playPause(self): self._tap(self.VK_MEDIA_PLAY_PAUSE)
+    def playPause(self):
+        self._tap(self.VK_MEDIA_PLAY_PAUSE)
+
     @pyqtSlot()
-    def next(self):      self._tap(self.VK_MEDIA_NEXT_TRACK)
+    def next(self):
+        self._tap(self.VK_MEDIA_NEXT_TRACK)
+
     @pyqtSlot()
-    def prev(self):      self._tap(self.VK_MEDIA_PREV_TRACK)
+    def prev(self):
+        self._tap(self.VK_MEDIA_PREV_TRACK)
+
     @pyqtSlot()
-    def stop(self):      self._tap(self.VK_MEDIA_STOP)
+    def stop(self):
+        self._tap(self.VK_MEDIA_STOP)
+
     @pyqtSlot()
-    def mute(self):      self._tap(self.VK_VOLUME_MUTE)
+    def mute(self):
+        self._tap(self.VK_VOLUME_MUTE)
+
     @pyqtSlot()
-    def volUp(self):     self._tap(self.VK_VOLUME_UP)
+    def volUp(self):
+        self._tap(self.VK_VOLUME_UP)
+
     @pyqtSlot()
-    def volDown(self):   self._tap(self.VK_VOLUME_DOWN)
+    def volDown(self):
+        self._tap(self.VK_VOLUME_DOWN)
 
 class HtmlInlineButton(QWidget):
     """
@@ -90,7 +103,7 @@ class HtmlInlineButton(QWidget):
         probe = QPushButton("Wg")
         probe.setFont(self.font())
         base_h = max(28, probe.sizeHint().height())
-        factor = 1.30 if not compact else 1.12   # Window größer, Popup kompakter
+        factor = 1.80 if not compact else 2.50   # Window größer, Popup kompakter
         target_h = int(base_h * factor)
 
         # Außenmargen schlank
