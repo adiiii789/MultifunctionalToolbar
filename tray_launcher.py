@@ -11,16 +11,81 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QCursor, QIcon, QColor, QGuiApplication
 from PyQt5.QtCore import (
-    Qt, QRect, QPoint, QFileSystemWatcher, QObject, pyqtSlot, QUrl, QPropertyAnimation, QEasingCurve, QEvent
+    Qt, QRect, QPoint, QFileSystemWatcher, QObject, pyqtSlot, QUrl, QPropertyAnimation, QEasingCurve, QEvent, QTimer
 )
 
 try:
-    from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings
+    from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings, QWebEnginePage
     from PyQt5.QtWebChannel import QWebChannel
 
     WEBENGINE_AVAILABLE = True
 except Exception:
     WEBENGINE_AVAILABLE = False
+
+class InlineInterceptPage(QWebEnginePage):
+    """
+    Fängt NUR User-Linkklicks ab (NavigationTypeLinkClicked) + target=_blank/window.open.
+    Hält Popup-Pages referenziert, damit Python-GC sie nicht zu früh zerstört.
+    """
+    def __init__(self, on_open_link=None, parent=None):
+        super().__init__(parent)
+        self._on_open_link = on_open_link
+        self._child_pages = []  # hält temporäre Pages am Leben
+
+    def _delegate(self, url: QUrl):
+        if callable(self._on_open_link):
+            self._on_open_link(url)
+
+    def acceptNavigationRequest(self, url, nav_type, isMainFrame):
+        if nav_type == QWebEnginePage.NavigationTypeLinkClicked:
+            self._delegate(url)
+            return False
+        return super().acceptNavigationRequest(url, nav_type, isMainFrame)
+
+    def createWindow(self, _type):
+        """
+        target=_blank / window.open(...):
+        - Erzeuge Child-Page, halte Referenz
+        - Delegiere bei erster URL-Änderung
+        - Räume danach auf (deleteLater), aber erst NACH der Delegation und einem Tick.
+        """
+        page = QWebEnginePage(self)
+        self._child_pages.append(page)
+
+        def _on_url_changed(u: QUrl):
+            try:
+                self._delegate(u)
+            finally:
+                # sanft aufräumen: erst beim nächsten Event-Loop-Tick
+                QTimer.singleShot(0, lambda: (
+                    page.deleteLater(),
+                    self._child_pages.remove(page) if page in self._child_pages else None
+                ))
+
+        page.urlChanged.connect(_on_url_changed)
+        return page
+
+class HtmlPluginContainerExternal(QWidget):
+    """Einfacher Container, um beliebige QUrl (http/https/file) als 'Plugin' zu zeigen."""
+    def __init__(self, url: QUrl):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        title = QLabel(f"🔗 {url.toString()}")
+        title.setStyleSheet("font-weight:bold;font-size:14px;")
+        lay.addWidget(title)
+
+        if WEBENGINE_AVAILABLE:
+            view = QWebEngineView(self)
+            try:
+                view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
+            except Exception:
+                pass
+            view.load(url)
+            lay.addWidget(view)
+        else:
+            msg = QLabel("PyQtWebEngine nicht verfügbar.")
+            lay.addWidget(msg)
+
 
 # --- Windows Media Control Bridge (for WebChannel) ---
 
@@ -78,18 +143,19 @@ class MediaControlBridge(QObject):
 
 class HtmlInlineButton(QWidget):
     """
-    Zeigt Inline-UI im Button:
-    - Unterstützt Dateien mit Präfix [HTML] sowohl als .html (geladen) als auch als .py (liefert HTML-String).
-    - .py-Datei muss eine Funktion get_inline_html(mode: str) -> str bereitstellen.
-    - mode = "popup" (compact=True) oder "window".
-    - Scroll/Zoom-Eingaben (Wheel/Gesten/CTRL+Zoom/Keys) auf Qt-Ebene deaktiviert.
-    - Stellt WebChannel-Objekt 'media' für window.media bereit (Mediatasten).
+    Inline-Anzeige einer [HTML]-Datei (".html" oder ".py"):
+      - .py: erwartet get_inline_html(mode:str)->str
+      - mode: "popup" (compact=True) oder "window"
+    Features:
+      - WebChannel 'media' bereitgestellt (window.media.*)
+      - Scroll/Zoom in View blockiert (Wheel/Gesten/Ctrl+Zoom/Keys)
+      - Link-/Button-Klicks werden abgefangen und als Plugin-Ansicht geöffnet
     """
     def __init__(self, path: str = None, title_text: str = None,
                  min_height: int = 160, compact: bool = False, **kwargs):
         super().__init__()
 
-        # Back-compat alias
+        # Back-compat: html_path Alias
         if path is None:
             path = kwargs.pop("html_path", None)
         if path is None:
@@ -99,57 +165,63 @@ class HtmlInlineButton(QWidget):
         self.src_path = os.path.abspath(path)
         self.compact = compact
 
-        # Zielhöhe relativ zur nativen Buttonhöhe (DPI/Theme-sicher)
+        # Höhe relativ zur nativen Buttonhöhe
         probe = QPushButton("Wg")
         probe.setFont(self.font())
         base_h = max(28, probe.sizeHint().height())
-        factor = 1.80 if not compact else 2.50   # Window größer, Popup kompakter
+        factor = 1.30 if not compact else 1.12
         target_h = int(base_h * factor)
-
-        # Außenmargen schlank
-        outer_top = max(4, target_h // 8)
-        outer_bot = max(4, target_h // 8)
+        top = max(4, target_h // 8)
+        bot = max(4, target_h // 8)
 
         self.setMinimumHeight(target_h)
         self.setMaximumHeight(target_h)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, outer_top, 8, outer_bot)
+        outer.setContentsMargins(8, top, 8, bot)
         outer.setSpacing(0)
 
         if WEBENGINE_AVAILABLE:
             try:
                 self.view = QWebEngineView(self)
+
+                # NEU: Seite mit Link-Abfang setzen
+                def _handle_open_link(qurl: QUrl):
+                    host = self.parent()
+                    while host and not hasattr(host, "_open_link_as_plugin"):
+                        host = host.parent()
+                    if host and callable(getattr(host, "_open_link_as_plugin", None)):
+                        host._open_link_as_plugin(qurl)
+                    else:
+                        import webbrowser
+                        webbrowser.open(qurl.toString())
+
+                self._page = InlineInterceptPage(on_open_link=_handle_open_link, parent=self.view)
+                self.view.setPage(self._page)
+
                 self.view.setAttribute(Qt.WA_TranslucentBackground, True)
                 self.view.page().setBackgroundColor(Qt.transparent)
-
-                # Scrollbars aus
                 try:
                     self.view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
                     self.view.page().settings().setAttribute(QWebEngineSettings.FullScreenSupportEnabled, False)
                 except Exception:
                     pass
 
-                # Höhe exakt an Container anpassen
                 self.view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-                self.view.setFixedHeight(max(24, target_h - (outer_top + outer_bot)))
+                self.view.setFixedHeight(max(24, target_h - (top + bot)))
+                self.view.installEventFilter(self)  # Scroll/Zoom blockieren
+                outer.addWidget(self.view)
 
-                # Scroll/Zoom auf Qt-Ebene blocken
-                self.view.installEventFilter(self)
-
-                # WebChannel registrieren (window.media in HTML nutzbar)
+                # WebChannel registrieren
                 self.channel = QWebChannel(self.view.page())
                 self.media = MediaControlBridge(self)
                 self.channel.registerObject("media", self.media)
                 self.view.page().setWebChannel(self.channel)
 
-                outer.addWidget(self.view)
-
-                # Render je nach Dateityp
+                # Laden je nach Typ
                 mode_val = "popup" if compact else "window"
                 lower = self.src_path.lower()
                 if lower.endswith(".html"):
-                    # Lokale HTML mit ?mode=
                     url = QUrl.fromLocalFile(self.src_path)
                     if url.hasQuery():
                         parts = [p for p in url.query().split("&") if not p.startswith("mode=")]
@@ -160,14 +232,12 @@ class HtmlInlineButton(QWidget):
                     self.view.load(url)
 
                 elif lower.endswith(".py"):
-                    # Python liefert HTML-String (get_inline_html(mode))
                     html = self._load_inline_html_from_py(self.src_path, mode_val)
-                    # setHtml mit baseUrl für evtl. relative Assets
                     base = QUrl.fromLocalFile(os.path.dirname(self.src_path) + os.sep)
                     self.view.setHtml(html, baseUrl=base)
 
                 else:
-                    # Fallback: als Text anzeigen
+                    # Fallback: Text anzeigen
                     try:
                         with open(self.src_path, "r", encoding="utf-8", errors="replace") as f:
                             raw = f.read()
@@ -184,10 +254,10 @@ class HtmlInlineButton(QWidget):
         else:
             self._fallback_area(outer)
 
+    # Python-[HTML]-Datei laden und HTML holen
     def _load_inline_html_from_py(self, file_path: str, mode: str) -> str:
-        """Lädt Modul dynamisch und ruft get_inline_html(mode) -> str auf."""
         try:
-            import importlib.util, types
+            import importlib.util
             spec = importlib.util.spec_from_file_location("inline_html_module", file_path)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)  # type: ignore
@@ -198,11 +268,11 @@ class HtmlInlineButton(QWidget):
             if not isinstance(html, str):
                 return "<!doctype html><meta charset='utf-8'><p style='margin:8px;color:#c00;'>get_inline_html() muss einen String zurückgeben.</p>"
             return self._wrap_no_scroll(html)
-        except Exception as e:
+        except Exception:
             return f"<!doctype html><meta charset='utf-8'><pre style='margin:8px;color:#c00;'>Fehler in {os.path.basename(file_path)}:\n{traceback.format_exc()}</pre>"
 
+    # No-Scroll/No-Zoom Wrapper + WebChannel-Bindung
     def _wrap_no_scroll(self, inner_html: str) -> str:
-        """Sorgt dafür, dass die gelieferte HTML im Button höhenstabil bleibt & kein Scroll/Zoom zulässt."""
         return f"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -213,9 +283,7 @@ class HtmlInlineButton(QWidget):
 {inner_html}
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script>
-  // WebChannel anbinden -> window.media.* nutzbar
   new QWebChannel(qt.webChannelTransport, ch => {{ window.media = ch.objects.media; }});
-  // Scroll & Zoom in der Seite zusätzlich blocken
   ['wheel','touchmove'].forEach(evt => window.addEventListener(evt, e => e.preventDefault(), {{passive:false}}));
   window.addEventListener('keydown', e => {{
     const blocked = ['ArrowUp','ArrowDown','PageUp','PageDown',' '];
@@ -224,7 +292,7 @@ class HtmlInlineButton(QWidget):
 </script>
 """
 
-    # Scroll/Zoom-Eingaben in der View blockieren
+    # Scroll/Zoom in der View blockieren
     def eventFilter(self, obj, event):
         if obj is getattr(self, "view", None):
             et = event.type()
@@ -243,6 +311,7 @@ class HtmlInlineButton(QWidget):
         btn = QPushButton("Im Browser öffnen")
         btn.clicked.connect(lambda: __import__("webbrowser").open('file://' + self.src_path))
         outer_layout.addWidget(btn)
+
 
 
 
@@ -1215,6 +1284,53 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.add_buttons(self.layout)
         self.set_plugin_loader(self.load_plugin_from_path)
 
+    # In MainAppWindow ersetzen:
+    def _open_link_as_plugin(self, qurl: QUrl):
+        """
+        Links aus Inline-HTML als Plugin-Seite öffnen – nutzt den globalen 'Explorer'-Button
+        in der Haupt-Toolbar (gleiches Verhalten wie bei anderen Plugins).
+        """
+        try:
+            # Lokale Datei → über den bestehenden Plugin-Loader öffnen
+            if qurl.isLocalFile():
+                path = qurl.toLocalFile()
+                self.load_plugin_from_path(path, source_widget=self)  # setzt show_explorer_btn intern
+                return
+
+            # Externe URL → große WebView-Seite in den Stack
+            page = QWidget()
+            v = QVBoxLayout(page)
+            v.setContentsMargins(12, 12, 12, 12)
+            v.setSpacing(8)
+
+            if WEBENGINE_AVAILABLE:
+                view = QWebEngineView(page)
+                try:
+                    view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
+                except Exception:
+                    pass
+                view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                view.load(qurl)
+                v.addWidget(view, 1)
+            else:
+                v.addWidget(QLabel("PyQtWebEngine ist nicht verfügbar."))
+
+            self.pages.addWidget(page)
+            self.pages.setCurrentWidget(page)
+
+            # 👉 Explorer-Button sichtbar machen – exakt wie bei anderen Plugins
+            self.show_explorer_btn = True
+            self._build_html_toolbar()
+            if WEBENGINE_AVAILABLE:
+                js = f'window.setBtnMode && window.setBtnMode("{theme}");'
+                try:
+                    self.html_toolbar.page().runJavaScript(js)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            QMessageBox.critical(self, "Link öffnen fehlgeschlagen", str(e))
+
     def update_scrollbar_theme(self):
         if hasattr(self, "scroll_area") and self.scroll_area:
             self.scroll_area.setStyleSheet(f"""
@@ -1492,8 +1608,8 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             if path.lower().endswith('.py'):
                 widget = self.load_python_plugin_widget(path, mode=plugin_mode)
                 if widget is None:
-                    QMessageBox.warning(source_widget or self, "Kein Plugin",
-                                        f"{os.path.basename(path)} enthält keine Klasse 'PluginWidget'.")
+                    #QMessageBox.warning(source_widget or self, "Kein Plugin",
+                    #                    f"{os.path.basename(path)} enthält keine Klasse 'PluginWidget'.")
                     return
             elif path.lower().endswith('.html'):
                 widget = HtmlPluginContainer(path)
