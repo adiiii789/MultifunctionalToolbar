@@ -48,14 +48,23 @@ def get_inline_html(mode: str) -> str:
   .btn:hover{{background:#4b9150}}
 </style>
 """
-    body = f"""
-<div class="wrap {'popup' if compact else 'window'}">
-  <div class="pill">🌍 {CITY}</div>
-  <div class="temp" id="temp">--°C</div>
-  <div class="pill" id="rain">Regen: --%</div>
-  <a class="btn" id="btnRadar" href="#">Regenradar</a>
-</div>
-"""
+    if mode == "window":
+        body = f"""
+    <div class="wrap {'popup' if compact else 'window'}">
+      <div class="pill">🌍 {CITY}</div>
+      <div class="temp" id="temp">--°C</div>
+      <div class="pill" id="rain">Regen: --%</div>
+      <a class="btn" id="btnRadar" href="#">Regenradar</a>
+    </div>
+    """
+    else: body = f"""
+    <div class="wrap {'popup' if compact else 'window'}">
+      <div class="pill">🌍 {CITY}</div>
+      <div class="temp" id="temp">--°C</div>
+      <div class="pill" id="rain">Regen: --%</div>
+    </div>
+    """
+
 
     js = f"""
 <script>
