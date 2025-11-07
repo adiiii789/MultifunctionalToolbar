@@ -1,5 +1,14 @@
 # --- tray_launcher.py (HTML lightswitch + safe back + search + stability) ---
 
+# TO MAKE EXE OF TRAYLAUNCHER USE FOLLOWING COMMAND IN TERMINAL:    pyinstaller --noconsole --onefile --icon=ProgrammIcon.ico --add-data "scripts;scripts" tray_launcher.py
+
+try:
+    import pytz
+    import dateutil.rrule
+    import icalendar
+except ImportError:
+    print("WARNUNG: Optionale Plugin-Abhängigkeiten (pytz, dateutil, icalendar) fehlen.")
+
 import sys
 import os
 import subprocess
@@ -651,7 +660,6 @@ class PopupWindow(ButtonContentMixin, QWidget):
             return
         mode_now = theme
         explorer_btn_html = f'<button id="explorerBtn" class="toolbar-btn {mode_now}">← Explorer</button>'
-        theme_btn_html = f'<button id="themeBtn"    class="toolbar-btn {mode_now}" title="Theme umschalten">🌙/☀️ Theme</button>'
         html_code = f"""
         <!DOCTYPE html>
         <html lang="de">
@@ -688,7 +696,6 @@ class PopupWindow(ButtonContentMixin, QWidget):
         <body>
             <div class="toolbar-container">
                 {explorer_btn_html}
-                {theme_btn_html}
             </div>
             <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
             <script>
@@ -782,25 +789,54 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             self.html_toolbar.setFixedHeight(44)
             self.html_toolbar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
-        # Suchfeld (Qt)
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search plugins...")
-        self.search_input.setFixedHeight(28); self.search_input.setFixedWidth(220)
-        self._update_searchbar_theme()
-        self.search_input.returnPressed.connect(self.search_plugins)
+            # --- Suchfeld (oben rechts) ---
+            self.search_input = QLineEdit()
+            self.search_input.setPlaceholderText("Search plugins...")
+            self.search_input.setFixedHeight(max(28, int(self.height_size * 0.08)))
+            self.search_input.setFixedWidth(220)  # FIXED WIDTH OF SEARCH BAR
+            self.search_input.setStyleSheet(f"""
+                   QLineEdit {{
+                       background: {'#292929' if is_dark() else '#ffffff'};
+                       color: {'#ffffff' if is_dark() else '#3a3a3a'};
+                       padding: 8px 10px;
+                       border-radius: 12px;
+                       border: 1.5px solid {'#777777' if is_dark() else '#888888'};
+                       outline: none;
+                       transition: all 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+                       box-shadow: 0px 0px 20px -18px;
+                   }}
+                   QLineEdit:hover {{
+                       border: 2px solid #555555;
+                       box-shadow: 0px 0px 20px -17px;
+                   }}
+                   QLineEdit:active {{
+                       transform: scale(0.95);
+                   }}
+                   QLineEdit:focus {{
+                       border: 2px solid grey;
+                   }}
+               """)
 
         toolbar.addWidget(self.html_toolbar); toolbar.addStretch(); toolbar.addWidget(self.search_input)
 
-        # Exit (Qt)
+        # --- Beenden-Button ---
         self.exit_button = QPushButton("Beenden")
-        self.exit_button.setFixedHeight(28)
+        self.exit_button.setFixedHeight(max(28, int(self.height_size * 0.08)))
         self.exit_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {'#aa3333' if is_dark() else '#ff5555'};
-                color: white; font-weight: bold; border: none; border-radius: 10px; padding: 6px 12px;
-            }}
-            QPushButton:hover {{ background-color: {'#cc4444' if is_dark() else '#ff6666'}; }}
-        """)
+                            QPushButton {{
+                                background-color: {'#aa3333' if is_dark() else '#ff5555'};
+                                color: white;
+                                font-weight: bold;
+                                border: none;
+                                border-radius: 10px;
+                                padding: 6px 12px;
+                            }}
+                            QPushButton:hover {{
+                                background-color: {'#cc4444' if is_dark() else '#ff6666'};
+                            }}
+                        """)
+        # 🧠 Option 1: Sauber beenden
+        self.exit_button.clicked.connect(self.app.quit)
         self.exit_button.clicked.connect(self.app.quit)
         toolbar.addWidget(self.exit_button)
 
