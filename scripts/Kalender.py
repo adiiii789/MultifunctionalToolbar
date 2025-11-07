@@ -17,156 +17,6 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 
-# ===========================
-# Konfiguration / Farben
-# ===========================
-CONFIG_FILE = "calendar_config.json"
-PALETTE = [
-    "#8ab4f8", "#f28b82", "#fbbc04", "#34a853", "#a78bfa", "#80cbc4",
-    "#ff79c6", "#c792ea", "#ffd54f", "#81c784", "#64b5f6"
-]
-LOCAL_TZ = timezone("Europe/Berlin")  # Lokale TZ für Normalisierung
-
-# ===========================
-# Pfade / Config
-# ===========================
-def _script_dir() -> Path:
-    try:
-        return Path(__file__).resolve().parent
-    except Exception:
-        return Path.cwd()
-
-
-def config_path() -> Path:
-    return _script_dir() / CONFIG_FILE
-
-
-def load_config() -> list:
-    p = config_path()
-    if p.exists():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            norm_paths = []
-            for path in data:
-                full_path = Path(path)
-                if not full_path.is_absolute():
-                    full_path = _script_dir() / full_path
-                norm_paths.append(str(full_path))
-            return norm_paths
-        except Exception:
-            return []
-    return []
-
-
-def save_config(paths: list):
-    p = config_path()
-    p.write_text(json.dumps(paths, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-# ===========================
-# Datums-/Zeit-Helfer
-# ===========================
-def ensure_datetime(x):
-    """
-    Normalize ICS date/datetime values to naive local datetimes (no tzinfo).
-    - date -> combine with 00:00 local
-    - aware datetime -> convert to LOCAL_TZ and drop tzinfo
-    - naive datetime -> keep as is
-    """
-    if isinstance(x, date) and not isinstance(x, datetime):
-        return datetime.combine(x, time.min)
-    if isinstance(x, datetime):
-        if x.tzinfo is None:
-            return x
-        dt_local = x.astimezone(LOCAL_TZ)
-        return dt_local.replace(tzinfo=None)
-    return x
-
-
-def current_week_range(today: date = None):
-    if today is None:
-        today = date.today()
-    monday = today - timedelta(days=today.weekday())
-    sunday = monday + timedelta(days=6)
-    return monday, sunday
-
-
-def next_week_range(today: date = None):
-    mo, _ = current_week_range(today)
-    n_mo = mo + timedelta(days=7)
-    n_su = n_mo + timedelta(days=6)
-    return n_mo, n_su
-
-
-# ===========================
-# Drag&Drop-Liste
-# ===========================
-class DropListWidget(QListWidget):
-    filesDropped = pyqtSignal(list)  # list[str]
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.viewport().setAcceptDrops(True)
-        self.setDragEnabled(False)
-        self.setDropIndicatorShown(True)
-        self.setDragDropMode(QAbstractItemView.DropOnly)
-        self.setSelectionMode(QListWidget.ExtendedSelection)
-        self.viewport().installEventFilter(self)
-
-    def eventFilter(self, obj, e):
-        if obj is self.viewport():
-            if e.type() in (QEvent.DragEnter, QEvent.DragMove):
-                if self._has_ics(e.mimeData()):
-                    e.acceptProposedAction()
-                else:
-                    e.ignore()
-                return True
-            elif e.type() == QEvent.Drop:
-                paths = self._extract_paths(e.mimeData())
-                if paths:
-                    e.acceptProposedAction()
-                    self.filesDropped.emit(paths)
-                else:
-                    e.ignore()
-                return True
-        return super().eventFilter(obj, e)
-
-    def _has_ics(self, mime):
-        if mime.hasUrls():
-            for u in mime.urls():
-                p = u.toLocalFile()
-                if p and p.lower().endswith(".ics"):
-                    return True
-        if mime.hasText():
-            for line in mime.text().splitlines():
-                s = line.strip()
-                if s.startswith("file://"):
-                    try:
-                        p = QUrl(s).toLocalFile()
-                        if p and p.lower().endswith(".ics"):
-                            return True
-                    except Exception:
-                        pass
-        return False
-
-    def _extract_paths(self, mime):
-        paths = []
-        if mime.hasUrls():
-            for u in mime.urls():
-                p = u.toLocalFile()
-                if p and p.lower().endswith(".ics"):
-                    paths.append(p)
-        if not paths and mime.hasText():
-            for line in mime.text().splitlines():
-                s = line.strip()
-                if s.startswith("file://"):
-                    p = QUrl(s).toLocalFile()
-                    if p and p.lower().endswith(".ics"):
-                        paths.append(p)
-        # de-dupe
-        return list(dict.fromkeys(paths))
-
 
 # ===========================
 # Haupt-Widget
@@ -409,7 +259,8 @@ class PluginWidget(QMainWindow):
                     duration = max(end_base - start_base, timedelta(minutes=1))
 
                     summary_base = str(comp.get("SUMMARY") or "Termin")
-                    all_day_base = isinstance(getattr(dtstart_prop, "dt", dtstart_prop), date) and not isinstance(getattr(dtstart_prop, "dt", dtstart_prop), datetime)
+                    all_day_base = isinstance(getattr(dtstart_prop, "dt", dtstart_prop), date) and not isinstance(
+                        getattr(dtstart_prop, "dt", dtstart_prop), datetime)
 
                     rrule_prop = comp.get("RRULE")
                     rdate_props = comp.get("RDATE")
@@ -466,15 +317,16 @@ class PluginWidget(QMainWindow):
                             if ov:
                                 o_dtstart_prop = ov.get("DTSTART")
                                 o_dtend_prop = ov.get("DTEND")
-                                o_start = ensure_datetime(getattr(o_dtstart_prop, "dt", o_dtstart_prop)) if o_dtstart_prop else occ_start
+                                o_start = ensure_datetime(
+                                    getattr(o_dtstart_prop, "dt", o_dtstart_prop)) if o_dtstart_prop else occ_start
                                 if o_dtend_prop:
                                     o_end = ensure_datetime(getattr(o_dtend_prop, "dt", o_dtend_prop))
                                 else:
                                     o_end = o_start + duration
                                 o_summary = str(ov.get("SUMMARY") or summary_base)
                                 o_all_day = (
-                                    isinstance(getattr(o_dtstart_prop, "dt", o_dtstart_prop), date) and
-                                    not isinstance(getattr(o_dtstart_prop, "dt", o_dtstart_prop), datetime)
+                                        isinstance(getattr(o_dtstart_prop, "dt", o_dtstart_prop), date) and
+                                        not isinstance(getattr(o_dtstart_prop, "dt", o_dtstart_prop), datetime)
                                 ) if o_dtstart_prop else all_day_base
                                 if o_end <= o_start:
                                     o_end = o_start + timedelta(minutes=60)
@@ -548,6 +400,7 @@ class PluginWidget(QMainWindow):
             def _key(ev):
                 s = datetime.fromisoformat(ev["start"])
                 return (0 if ev.get("allDay") else 1, s.time())
+
             todays.sort(key=_key)
 
             html = self._build_day_compact_html(todays, today_date)
@@ -611,6 +464,158 @@ class PluginWidget(QMainWindow):
         html = DAY_HTML_TEMPLATE
         html = html.replace("__EVENTS__", events_json)
         return html
+
+
+# ===========================
+# Konfiguration / Farben
+# ===========================
+CONFIG_FILE = "calendar_config.json"
+PALETTE = [
+    "#8ab4f8", "#f28b82", "#fbbc04", "#34a853", "#a78bfa", "#80cbc4",
+    "#ff79c6", "#c792ea", "#ffd54f", "#81c784", "#64b5f6"
+]
+LOCAL_TZ = timezone("Europe/Berlin")  # Lokale TZ für Normalisierung
+
+
+# ===========================
+# Pfade / Config
+# ===========================
+def _script_dir() -> Path:
+    try:
+        return Path(__file__).resolve().parent
+    except Exception:
+        return Path.cwd()
+
+
+def config_path() -> Path:
+    return _script_dir() / CONFIG_FILE
+
+
+def load_config() -> list:
+    p = config_path()
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            norm_paths = []
+            for path in data:
+                full_path = Path(path)
+                if not full_path.is_absolute():
+                    full_path = _script_dir() / full_path
+                norm_paths.append(str(full_path))
+            return norm_paths
+        except Exception:
+            return []
+    return []
+
+
+def save_config(paths: list):
+    p = config_path()
+    p.write_text(json.dumps(paths, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ===========================
+# Datums-/Zeit-Helfer
+# ===========================
+def ensure_datetime(x):
+    """
+    Normalize ICS date/datetime values to naive local datetimes (no tzinfo).
+    - date -> combine with 00:00 local
+    - aware datetime -> convert to LOCAL_TZ and drop tzinfo
+    - naive datetime -> keep as is
+    """
+    if isinstance(x, date) and not isinstance(x, datetime):
+        return datetime.combine(x, time.min)
+    if isinstance(x, datetime):
+        if x.tzinfo is None:
+            return x
+        dt_local = x.astimezone(LOCAL_TZ)
+        return dt_local.replace(tzinfo=None)
+    return x
+
+
+def current_week_range(today: date = None):
+    if today is None:
+        today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    sunday = monday + timedelta(days=6)
+    return monday, sunday
+
+
+def next_week_range(today: date = None):
+    mo, _ = current_week_range(today)
+    n_mo = mo + timedelta(days=7)
+    n_su = n_mo + timedelta(days=6)
+    return n_mo, n_su
+
+
+# ===========================
+# Drag&Drop-Liste
+# ===========================
+class DropListWidget(QListWidget):
+    filesDropped = pyqtSignal(list)  # list[str]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.setDragEnabled(False)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DropOnly)
+        self.setSelectionMode(QListWidget.ExtendedSelection)
+        self.viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, e):
+        if obj is self.viewport():
+            if e.type() in (QEvent.DragEnter, QEvent.DragMove):
+                if self._has_ics(e.mimeData()):
+                    e.acceptProposedAction()
+                else:
+                    e.ignore()
+                return True
+            elif e.type() == QEvent.Drop:
+                paths = self._extract_paths(e.mimeData())
+                if paths:
+                    e.acceptProposedAction()
+                    self.filesDropped.emit(paths)
+                else:
+                    e.ignore()
+                return True
+        return super().eventFilter(obj, e)
+
+    def _has_ics(self, mime):
+        if mime.hasUrls():
+            for u in mime.urls():
+                p = u.toLocalFile()
+                if p and p.lower().endswith(".ics"):
+                    return True
+        if mime.hasText():
+            for line in mime.text().splitlines():
+                s = line.strip()
+                if s.startswith("file://"):
+                    try:
+                        p = QUrl(s).toLocalFile()
+                        if p and p.lower().endswith(".ics"):
+                            return True
+                    except Exception:
+                        pass
+        return False
+
+    def _extract_paths(self, mime):
+        paths = []
+        if mime.hasUrls():
+            for u in mime.urls():
+                p = u.toLocalFile()
+                if p and p.lower().endswith(".ics"):
+                    paths.append(p)
+        if not paths and mime.hasText():
+            for line in mime.text().splitlines():
+                s = line.strip()
+                if s.startswith("file://"):
+                    p = QUrl(s).toLocalFile()
+                    if p and p.lower().endswith(".ics"):
+                        paths.append(p)
+        # de-dupe
+        return list(dict.fromkeys(paths))
 
 
 # ===========================

@@ -1,3 +1,12 @@
+# TO MAKE AN .EXE PUT IN THE FOLLOWING COMMAND IN TERMINAL:  pyinstaller --noconsole --onefile --icon=ProgrammIcon.ico --add-data "scripts;scripts" tray_launcher.py
+
+try:
+    import pytz
+    import dateutil.rrule
+    import icalendar
+except ImportError:
+    print("WARNUNG: Optionale Plugin-Abhängigkeiten (pytz, dateutil, icalendar) fehlen.")
+
 import sys
 import os
 import subprocess
@@ -169,7 +178,7 @@ class HtmlInlineButton(QWidget):
         probe = QPushButton("Wg")
         probe.setFont(self.font())
         base_h = max(28, probe.sizeHint().height())
-        factor = 1.30 if not compact else 1.12
+        factor = 1.80 if not compact else 2.4
         target_h = int(base_h * factor)
         top = max(4, target_h // 8)
         bot = max(4, target_h // 8)
