@@ -23,29 +23,57 @@ def get_inline_html(mode: str) -> str:
 
     css = rf"""
 <style>
+  :root {{
+    --pill-bg: rgba(255,255,255,0.12);
+    --pill-color: #fdfdfd;
+    --temp-bg: #244c88;
+    --temp-color: #fefefe;
+    --btn-bg: #3c7d3c;
+    --btn-hover: #4b9150;
+    --btn-color: #fefefe;
+  }}
+  body[data-theme="light"] {{
+    --pill-bg: rgba(236,239,245,0.9);
+    --pill-color: #1b2334;
+    --temp-bg: #dfe8ff;
+    --temp-color: #102148;
+    --btn-bg: #4f7ef5;
+    --btn-hover: #3d6ae0;
+    --btn-color: #ffffff;
+  }}
+  body[data-theme="dark"] {{
+    --pill-bg: rgba(255,255,255,0.12);
+    --pill-color: #fdfdfd;
+    --temp-bg: #244c88;
+    --temp-color: #fefefe;
+    --btn-bg: #3c7d3c;
+    --btn-hover: #4b9150;
+    --btn-color: #fefefe;
+  }}
   html,body{{height:100%;margin:0;padding:0;background:transparent;overflow:hidden}}
   *{{box-sizing:border-box}}
   .wrap{{height:100%;display:flex;align-items:center;gap:{'6px' if compact else '10px'};padding:0 {'8px' if compact else '12px'};}}
   .pill{{
     height:100%;display:flex;align-items:center;justify-content:center;
-    background:#2d2d2d;color:#fff;border-radius:10px;
+    background:var(--pill-bg);color:var(--pill-color);border-radius:10px;
     padding:0 {'10px' if compact else '14px'};
-    font:{'600 13px' if compact else '600 14px'}/1 system-ui,Segoe UI,Arial
+    font:{'600 13px' if compact else '600 14px'}/1 system-ui,Segoe UI,Arial;
   }}
   .temp{{
     height:100%;display:flex;align-items:center;justify-content:center;
-    background:#244c88;color:#fff;border-radius:10px;
+    background:var(--temp-bg);color:var(--temp-color);border-radius:10px;
     padding:0 {'12px' if compact else '16px'};
-    font:{'700 16px' if compact else '700 18px'}/1.1 ui-monospace,Consolas,monospace
+    font:{'700 16px' if compact else '700 18px'}/1.1 ui-monospace,Consolas,monospace;
   }}
   .btn{{
     height:100%;display:flex;align-items:center;justify-content:center;
-    background:#3c7d3c;color:#fff;border:none;border-radius:10px;cursor:pointer;
+    background:var(--btn-bg);color:var(--btn-color);border:none;border-radius:10px;cursor:pointer;
     padding:0 {'10px' if compact else '14px'};
     font:{'600 12px' if compact else '600 13px'}/1 system-ui,Segoe UI,Arial;
-    text-decoration:none; box-shadow:0 2px 8px rgba(0,0,0,.12)
+    text-decoration:none;
+    transition: background .2s, transform .2s;
   }}
-  .btn:hover{{background:#4b9150}}
+  .btn:hover{{background:var(--btn-hover); transform: translateY(-1px);}}
 </style>
 """
     if mode == "window":
@@ -131,7 +159,7 @@ def get_inline_html(mode: str) -> str:
   }})();
 
   // -------- Klick: Windy-Embed in data:-Seite mit Overlay (Regenwahrscheinlichkeit) --------
-  btnRadar.addEventListener('click', function(e){{
+  if (btnRadar) btnRadar.addEventListener('click', function(e){{
     e.preventDefault();
 
     const prob = (lastProb==null ? '–' : (lastProb + '%'));
@@ -169,4 +197,39 @@ def get_inline_html(mode: str) -> str:
 }})();
 </script>
 """
-    return css + body + js
+    theme_js = """
+<script>
+(function() {{
+  const applyTheme = (theme) => {{
+    const normalized = (theme === 'dark') ? 'dark' : 'light';
+    document.body.setAttribute('data-theme', normalized);
+  }};
+
+  function connectThemeBridge(attempt = 0) {{
+    if (!window.media) {{
+      if (attempt < 40) {{
+        return void setTimeout(() => connectThemeBridge(attempt + 1), 120);
+      }}
+      return applyTheme('light');
+    }}
+
+    if (window.media.themeChanged && typeof window.media.themeChanged.connect === 'function') {{
+      window.media.themeChanged.connect(applyTheme);
+    }}
+
+    if (typeof window.media.getTheme === 'function') {{
+      try {{
+        window.media.getTheme(function(theme) {{ applyTheme(theme); }});
+      }} catch (err) {{
+        applyTheme('light');
+      }}
+    }} else {{
+      applyTheme('light');
+    }}
+  }}
+
+  window.addEventListener('load', () => connectThemeBridge());
+}})();
+</script>
+"""
+    return css + body + js + theme_js

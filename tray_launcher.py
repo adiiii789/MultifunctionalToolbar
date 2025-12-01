@@ -6,6 +6,7 @@ try:
     import pytz
     import dateutil.rrule
     import icalendar
+    import uuid
 except ImportError:
     print("WARNUNG: Optionale Plugin-Abhängigkeiten (pytz, dateutil, icalendar) fehlen.")
 
@@ -24,7 +25,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QCursor, QIcon, QColor, QGuiApplication
 from PyQt5.QtCore import (
     Qt, QRect, QFileSystemWatcher, QObject, pyqtSlot, QUrl,
-    QPropertyAnimation, QEasingCurve, QEvent, QTimer
+    QPropertyAnimation, QEasingCurve, QEvent, QTimer, pyqtSignal
 )
 
 # --- WebEngine optional laden ---
@@ -120,6 +121,8 @@ class HtmlPluginContainerExternal(QWidget):
 
 # --- Windows Media Control Bridge (für Inline-HTML) ---
 class MediaControlBridge(QObject):
+    themeChanged = pyqtSignal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         import platform
@@ -135,11 +138,54 @@ class MediaControlBridge(QObject):
             self.VK_VOLUME_DOWN      = 0xAE
             self.VK_VOLUME_UP        = 0xAF
 
+        self._app = QApplication.instance()
+        self._theme = self._read_theme()
+        if self._app is not None:
+            self._app.installEventFilter(self)
+        self.destroyed.connect(self._detach_theme_watcher)
+
+    def _read_theme(self):
+        if self._app is not None:
+            val = self._app.property("toolbar_theme")
+            if isinstance(val, str):
+                return val.lower()
+        return "dark"
+
+    def _update_theme(self, value):
+        value = (value or "").lower()
+        if value not in ("light", "dark"):
+            return
+        if value != self._theme:
+            self._theme = value
+            self.themeChanged.emit(self._theme)
+
     def _tap(self, vk):
         if not getattr(self, "_is_windows", False): return
         KEYEVENTF_KEYUP = 0x0002
         self._user32.keybd_event(vk, 0, 0, 0)
         self._user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+
+    def eventFilter(self, watched, event):
+        if watched is self._app and event.type() == QEvent.DynamicPropertyChange:
+            try:
+                prop = event.propertyName().data().decode('utf-8')
+            except Exception:
+                prop = None
+            if prop == "toolbar_theme":
+                self._update_theme(self._app.property("toolbar_theme"))
+        return super().eventFilter(watched, event)
+
+    def _detach_theme_watcher(self):
+        if self._app is not None:
+            try:
+                self._app.removeEventFilter(self)
+            except Exception:
+                pass
+            self._app = None
+
+    @pyqtSlot(result=str)
+    def getTheme(self):
+        return self._theme
 
     @pyqtSlot()
     def playPause(self): self._tap(self.VK_MEDIA_PLAY_PAUSE)
@@ -305,6 +351,11 @@ def set_theme(new_theme, app=None):
     theme = new_theme
     if app is not None:
         app.setStyleSheet(current_stylesheet())
+        app.setProperty("toolbar_theme", theme)
+    else:
+        inst = QApplication.instance()
+        if inst is not None:
+            inst.setProperty("toolbar_theme", theme)
 
 
 def ensure_sample_plugin(script_root: str):
@@ -1169,6 +1220,7 @@ class TrayApp(QApplication):
         super().__init__(sys_argv)
         self.setQuitOnLastWindowClosed(False)
         self.setStyleSheet(current_stylesheet())
+        self.setProperty("toolbar_theme", theme)
         self.popup = PopupWindow(app=self)
         self.main_window = MainAppWindow(self, popup=self.popup)
         self.popup.set_plugin_loader(self.main_window.load_plugin_from_path)
