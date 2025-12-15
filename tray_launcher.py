@@ -1,4 +1,4 @@
-# --- tray_launcher.py (HTML lightswitch + safe back + search + stability) ---
+# --- tray_launcher.py (HTML lightswitch + safe back + search + stability + TABS v2 Design) ---
 
 # TO MAKE EXE OF TRAYLAUNCHER USE FOLLOWING COMMAND IN TERMINAL:    pyinstaller --noconsole --onefile --icon=ProgrammIcon.ico --add-data "scripts;scripts" tray_launcher.py
 
@@ -20,7 +20,8 @@ from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QSystemTrayIcon, QMainWindow, QSizePolicy, QHBoxLayout, QLabel,
-    QStackedWidget, QMessageBox, QScrollArea, QLineEdit, QFileDialog
+    QStackedWidget, QMessageBox, QScrollArea, QLineEdit, QFileDialog,
+    QTabWidget, QTabBar
 )
 from PyQt5.QtGui import QCursor, QIcon, QColor, QGuiApplication
 from PyQt5.QtCore import (
@@ -33,11 +34,13 @@ WEBENGINE_AVAILABLE = False
 try:
     try:
         from PyQt5.QtWebEngine import QtWebEngine
+
         QtWebEngine.initialize()
     except Exception:
         pass
     from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings, QWebEnginePage
     from PyQt5.QtWebChannel import QWebChannel
+
     WEBENGINE_AVAILABLE = True
 except Exception:
     WEBENGINE_AVAILABLE = False
@@ -86,6 +89,7 @@ class InlineInterceptPage(QWebEnginePage):
                     page.urlChanged.disconnect(_on_url_changed)
                 except Exception:
                     pass
+
                 def _cleanup():
                     try:
                         if page in self._child_pages:
@@ -96,6 +100,7 @@ class InlineInterceptPage(QWebEnginePage):
                         page.deleteLater()
                     except Exception:
                         pass
+
                 QTimer.singleShot(0, _cleanup)
 
         page.urlChanged.connect(_on_url_changed)
@@ -132,11 +137,11 @@ class MediaControlBridge(QObject):
             self._user32 = ctypes.windll.user32
             self.VK_MEDIA_NEXT_TRACK = 0xB0
             self.VK_MEDIA_PREV_TRACK = 0xB1
-            self.VK_MEDIA_STOP       = 0xB2
+            self.VK_MEDIA_STOP = 0xB2
             self.VK_MEDIA_PLAY_PAUSE = 0xB3
-            self.VK_VOLUME_MUTE      = 0xAD
-            self.VK_VOLUME_DOWN      = 0xAE
-            self.VK_VOLUME_UP        = 0xAF
+            self.VK_VOLUME_MUTE = 0xAD
+            self.VK_VOLUME_DOWN = 0xAE
+            self.VK_VOLUME_UP = 0xAF
 
         self._app = QApplication.instance()
         self._theme = self._read_theme()
@@ -188,19 +193,32 @@ class MediaControlBridge(QObject):
         return self._theme
 
     @pyqtSlot()
-    def playPause(self): self._tap(self.VK_MEDIA_PLAY_PAUSE)
+    def playPause(self):
+        self._tap(self.VK_MEDIA_PLAY_PAUSE)
+
     @pyqtSlot()
-    def next(self):      self._tap(self.VK_MEDIA_NEXT_TRACK)
+    def next(self):
+        self._tap(self.VK_MEDIA_NEXT_TRACK)
+
     @pyqtSlot()
-    def prev(self):      self._tap(self.VK_MEDIA_PREV_TRACK)
+    def prev(self):
+        self._tap(self.VK_MEDIA_PREV_TRACK)
+
     @pyqtSlot()
-    def stop(self):      self._tap(self.VK_MEDIA_STOP)
+    def stop(self):
+        self._tap(self.VK_MEDIA_STOP)
+
     @pyqtSlot()
-    def mute(self):      self._tap(self.VK_VOLUME_MUTE)
+    def mute(self):
+        self._tap(self.VK_VOLUME_MUTE)
+
     @pyqtSlot()
-    def volUp(self):     self._tap(self.VK_VOLUME_UP)
+    def volUp(self):
+        self._tap(self.VK_VOLUME_UP)
+
     @pyqtSlot()
-    def volDown(self):   self._tap(self.VK_VOLUME_DOWN)
+    def volDown(self):
+        self._tap(self.VK_VOLUME_DOWN)
 
 
 class HtmlInlineButton(QWidget):
@@ -215,12 +233,18 @@ class HtmlInlineButton(QWidget):
         self.src_path = os.path.abspath(path)
         self.compact = compact
 
-        probe = QPushButton("Wg"); base_h = max(28, probe.sizeHint().height())
+        probe = QPushButton("Wg");
+        base_h = max(28, probe.sizeHint().height())
         factor = 1.8 if not compact else 2.4
-        target_h = int(base_h * factor); top = max(4, target_h // 8); bot = max(4, target_h // 8)
-        self.setMinimumHeight(target_h); self.setMaximumHeight(target_h)
+        target_h = int(base_h * factor);
+        top = max(4, target_h // 8);
+        bot = max(4, target_h // 8)
+        self.setMinimumHeight(target_h);
+        self.setMaximumHeight(target_h)
 
-        outer = QVBoxLayout(self); outer.setContentsMargins(8, top, 8, bot); outer.setSpacing(0)
+        outer = QVBoxLayout(self);
+        outer.setContentsMargins(8, top, 8, bot);
+        outer.setSpacing(0)
 
         if WEBENGINE_AVAILABLE:
             try:
@@ -233,18 +257,22 @@ class HtmlInlineButton(QWidget):
                     if host and callable(getattr(host, "_open_link_as_plugin", None)):
                         host._open_link_as_plugin(qurl)
                     else:
-                        import webbrowser; webbrowser.open(qurl.toString())
+                        import webbrowser;
+                        webbrowser.open(qurl.toString())
 
                 self._page = InlineInterceptPage(on_open_link=_handle_open_link, parent=self.view)
                 self.view.setPage(self._page)
 
                 self.view.setAttribute(Qt.WA_TranslucentBackground, True)
-                try: self.view.page().setBackgroundColor(Qt.transparent)
-                except Exception: pass
+                try:
+                    self.view.page().setBackgroundColor(Qt.transparent)
+                except Exception:
+                    pass
                 try:
                     self.view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
                     self.view.page().settings().setAttribute(QWebEngineSettings.FullScreenSupportEnabled, False)
-                except Exception: pass
+                except Exception:
+                    pass
 
                 self.view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
                 self.view.setFixedHeight(max(24, target_h - (top + bot)))
@@ -262,7 +290,8 @@ class HtmlInlineButton(QWidget):
                     url = QUrl.fromLocalFile(self.src_path)
                     if url.hasQuery():
                         parts = [p for p in url.query().split("&") if not p.startswith("mode=")]
-                        parts.append(f"mode={mode_val}"); url.setQuery("&".join(parts))
+                        parts.append(f"mode={mode_val}");
+                        url.setQuery("&".join(parts))
                     else:
                         url.setQuery(f"mode={mode_val}")
                     self.view.load(url)
@@ -276,19 +305,21 @@ class HtmlInlineButton(QWidget):
                             raw = f.read()
                     except Exception as e:
                         raw = f"Fehler beim Lesen: {e}"
-                    esc = (raw.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
+                    esc = (raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
                     html = f"<!doctype html><meta charset='utf-8'><pre style='margin:0;padding:8px;font:13px/1.3 monospace;'>{esc}</pre>"
                     base = QUrl.fromLocalFile(os.path.dirname(self.src_path) + os.sep)
                     self.view.setHtml(html, baseUrl=base)
             except Exception:
-                print("HtmlInlineButton init error:", traceback.format_exc()); self._fallback_area(outer)
+                print("HtmlInlineButton init error:", traceback.format_exc());
+                self._fallback_area(outer)
         else:
             self._fallback_area(outer)
 
     def _load_inline_html_from_py(self, file_path: str, mode: str) -> str:
         try:
             spec = importlib.util.spec_from_file_location("inline_html_module", file_path)
-            mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)  # type: ignore
+            mod = importlib.util.module_from_spec(spec);
+            spec.loader.exec_module(mod)  # type: ignore
             fn = getattr(mod, "get_inline_html", None)
             if not callable(fn):
                 return f"<!doctype html><meta charset='utf-8'><p style='margin:8px;color:#c00;'>Fehlende Funktion <code>get_inline_html(mode)</code> in {os.path.basename(file_path)}</p>"
@@ -317,8 +348,10 @@ window.addEventListener('keydown', e => {{ const blocked=['ArrowUp','ArrowDown',
             et = event.type()
             if et in (QEvent.Wheel, QEvent.Gesture, QEvent.NativeGesture): return True
             if et == QEvent.KeyPress:
-                try: key = event.key(); mods = event.modifiers()
-                except Exception: key, mods = None, 0
+                try:
+                    key = event.key(); mods = event.modifiers()
+                except Exception:
+                    key, mods = None, 0
                 if mods & Qt.ControlModifier: return True
                 if key in {Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown, Qt.Key_Space}: return True
         return super().eventFilter(obj, event)
@@ -334,10 +367,12 @@ QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
 QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
 
 # --- Theme globals ---
-theme = "dark"   # "dark" | "light"
+theme = "dark"  # "dark" | "light"
 mode = "Window"
 
+
 def is_dark(): return theme == "dark"
+
 
 def current_stylesheet():
     return """
@@ -345,6 +380,7 @@ def current_stylesheet():
     """ if is_dark() else """
         QWidget { background-color: #FFFFFF; color: #000000; }
     """
+
 
 def set_theme(new_theme, app=None):
     global theme
@@ -418,8 +454,10 @@ class ButtonContentMixin:
 
     def _base_dir(self) -> str:
         return os.path.abspath(getattr(self, "SCRIPT_FOLDER", "scripts"))
+
     def _default_dir(self) -> str:
         return self._base_dir()
+
     def _resolve_path(self, p: str) -> str:
         if not p: return None
         p = os.path.expanduser(p.strip())
@@ -442,15 +480,21 @@ class ButtonContentMixin:
             print("Watcher-Probleme:", traceback.format_exc())
         self.plugin_loader = None
 
-    def set_plugin_loader(self, loader_callable): self.plugin_loader = loader_callable
-    def on_directory_changed(self, path): self.add_buttons(self.layout)
+    def set_plugin_loader(self, loader_callable):
+        self.plugin_loader = loader_callable
+
+    def on_directory_changed(self, path):
+        self.add_buttons(self.layout)
 
     def add_buttons(self, layout):
         for i in reversed(range(layout.count())):
-            it = layout.itemAt(i); w = it.widget() if it else None
+            it = layout.itemAt(i);
+            w = it.widget() if it else None
             if w: w.setParent(None)
 
-        layout.setSpacing(0); layout.setContentsMargins(0,0,0,0); layout.setAlignment(Qt.AlignTop)
+        layout.setSpacing(0);
+        layout.setContentsMargins(0, 0, 0, 0);
+        layout.setAlignment(Qt.AlignTop)
 
         if self.current_path != os.path.abspath(self.SCRIPT_FOLDER):
             back_button = QPushButton("← Zurück")
@@ -471,7 +515,8 @@ class ButtonContentMixin:
             filtered = [e for e in filtered if q in e.lower()]
 
         def group_key(name: str):
-            nl = name.lower(); full = os.path.join(self.current_path, name)
+            nl = name.lower();
+            full = os.path.join(self.current_path, name)
             if nl.startswith("[html]"):  return (0, nl)
             if nl.endswith(".html"):     return (1, nl)
             if nl.endswith(".py"):       return (2, nl)
@@ -549,7 +594,8 @@ class ButtonContentMixin:
                 if path.endswith('.py'):
                     subprocess.Popen([sys.executable, path])
                 elif path.endswith('.html'):
-                    import webbrowser; webbrowser.open('file://' + os.path.abspath(path))
+                    import webbrowser;
+                    webbrowser.open('file://' + os.path.abspath(path))
         except Exception:
             print("Skriptstart fehlgeschlagen:", traceback.format_exc())
 
@@ -571,8 +617,10 @@ class ButtonContentMixin:
                     entry_type = w.property("entry_type")
                     if entry_type == "folder":
                         w.setStyleSheet(f"""
-                            QPushButton {{ background-color: {'#3A4A6A' if is_dark() else '#c2d1ff'}; color: {'#fff' if is_dark() else '#000'}; }}
-                            QPushButton:hover {{ background-color: {'#4B5B6B' if is_dark() else '#a1b8ff'}; }}
+                            QPushButton {{ background-color: {'#3A4A6A' if is_dark() else '#c2d1ff'};
+color: {'#fff' if is_dark() else '#000'}; }}
+                            QPushButton:hover {{ background-color: {'#4B5B6B' if is_dark() else '#a1b8ff'};
+}}
                         """)
                     elif entry_type == "file":
                         w.setStyleSheet(f"""
@@ -596,16 +644,20 @@ class HtmlPluginContainer(QWidget):
             try:
                 view = QWebEngineView(self)
                 view.load(QUrl.fromLocalFile(os.path.abspath(html_path)))
-                try: view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
-                except Exception: pass
+                try:
+                    view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
+                except Exception:
+                    pass
                 layout.addWidget(view)
             except Exception:
                 layout.addWidget(QLabel("PyQtWebEngine-Fehler. Öffne extern."))
-                b = QPushButton("Im Standardbrowser öffnen"); layout.addWidget(b)
+                b = QPushButton("Im Standardbrowser öffnen");
+                layout.addWidget(b)
                 b.clicked.connect(lambda: __import__("webbrowser").open('file://' + os.path.abspath(html_path)))
         else:
             layout.addWidget(QLabel("PyQtWebEngine nicht installiert."))
-            b = QPushButton("Im Standardbrowser öffnen"); layout.addWidget(b)
+            b = QPushButton("Im Standardbrowser öffnen");
+            layout.addWidget(b)
             b.clicked.connect(lambda: __import__("webbrowser").open('file://' + os.path.abspath(html_path)))
 
 
@@ -646,32 +698,41 @@ class PopupWindow(ButtonContentMixin, QWidget):
             self.channel.registerObject("bridge", self.bridge)
             self.html_toolbar.page().setWebChannel(self.channel)
             self.html_toolbar.setVisible(False)
-            try: self.html_toolbar.page().setBackgroundColor(QColor(0, 0, 0, 0))
-            except Exception: pass
+            try:
+                self.html_toolbar.page().setBackgroundColor(QColor(0, 0, 0, 0))
+            except Exception:
+                pass
 
         self._build_html_toolbar()
 
         self.explorer_container = QWidget()
         self.layout = QVBoxLayout(self.explorer_container)
-        self.layout.setContentsMargins(0, 0, 0, 0); self.layout.setSpacing(0)
+        self.layout.setContentsMargins(0, 0, 0, 0);
+        self.layout.setSpacing(0)
 
         self.init_button_state()
 
-        self.scroll_area = QScrollArea(); self.scroll_area.setWidgetResizable(True)
+        self.scroll_area = QScrollArea();
+        self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QScrollArea.NoFrame)
         self._update_scrollbar_theme()
         self.scroll_area.setWidget(self.explorer_container)
 
-        self.pages = QStackedWidget(); self.pages.addWidget(self.scroll_area)
+        self.pages = QStackedWidget();
+        self.pages.addWidget(self.scroll_area)
 
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(8, 8, 8, 8); self.main_layout.setSpacing(4)
-        self.main_layout.addWidget(self.html_toolbar); self.main_layout.addWidget(self.pages)
+        self.main_layout.setContentsMargins(8, 8, 8, 8);
+        self.main_layout.setSpacing(4)
+        self.main_layout.addWidget(self.html_toolbar);
+        self.main_layout.addWidget(self.pages)
 
-        self._update_relative_size(); self.setFixedSize(self.width_size, self.height_size)
+        self._update_relative_size();
+        self.setFixedSize(self.width_size, self.height_size)
 
         self.animation = QPropertyAnimation(self, b"geometry")
-        self.animation.setDuration(500); self.animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.animation.setDuration(500);
+        self.animation.setEasingCurve(QEasingCurve.OutCubic)
 
     def _safe_close_active_page(self):
         if self.pages.currentWidget() is self.scroll_area: return
@@ -680,12 +741,18 @@ class PopupWindow(ButtonContentMixin, QWidget):
         if WEBENGINE_AVAILABLE:
             try:
                 for view in page_widget.findChildren(QWebEngineView):
-                    try: view.load(QUrl("about:blank"))
-                    except Exception: pass
-            except Exception: pass
-        try: self.pages.removeWidget(page_widget)
-        except Exception: pass
-        page_widget.setParent(None); QTimer.singleShot(0, page_widget.deleteLater)
+                    try:
+                        view.load(QUrl("about:blank"))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        try:
+            self.pages.removeWidget(page_widget)
+        except Exception:
+            pass
+        page_widget.setParent(None);
+        QTimer.singleShot(0, page_widget.deleteLater)
 
     def _update_scrollbar_theme(self):
         self.scroll_area.setStyleSheet(f"""
@@ -704,7 +771,9 @@ class PopupWindow(ButtonContentMixin, QWidget):
 
     def _update_relative_size(self):
         screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
-        geo = screen.geometry(); self.width_size = int(geo.width()*0.15); self.height_size = int(geo.height()*0.5)
+        geo = screen.geometry();
+        self.width_size = int(geo.width() * 0.15);
+        self.height_size = int(geo.height() * 0.5)
 
     def _build_html_toolbar(self):
         if not WEBENGINE_AVAILABLE:
@@ -775,10 +844,15 @@ class PopupWindow(ButtonContentMixin, QWidget):
         safe_run_js(self.html_toolbar, f'window.setThemeUI && window.setThemeUI("{theme}");')
 
     def show_plugin_widget(self, widget: QWidget, title: str = ""):
-        container = QWidget(); v = QVBoxLayout(container); v.setContentsMargins(8,8,8,8)
-        header = QLabel(f"🧩 Plugin: {title}"); header.setStyleSheet("font-weight:600;font-size:15px;margin-bottom:6px;")
-        v.addWidget(header); v.addWidget(widget)
-        self.pages.addWidget(container); self.pages.setCurrentWidget(container)
+        container = QWidget();
+        v = QVBoxLayout(container);
+        v.setContentsMargins(8, 8, 8, 8)
+        header = QLabel(f"🧩 Plugin: {title}");
+        header.setStyleSheet("font-weight:600;font-size:15px;margin-bottom:6px;")
+        v.addWidget(header);
+        v.addWidget(widget)
+        self.pages.addWidget(container);
+        self.pages.setCurrentWidget(container)
         self.show_toolbar_with_theme_check()
 
     def show_explorer(self):
@@ -794,29 +868,40 @@ class PopupWindow(ButtonContentMixin, QWidget):
         safe_run_js(self.html_toolbar, f'window.setThemeUI && window.setThemeUI("{theme}");')
 
     def show_popup(self):
-        self._update_scrollbar_theme(); self.add_buttons(self.layout); self.update_button_styles(self.layout)
-        self._build_html_toolbar(); self._update_relative_size(); self.setFixedSize(self.width_size, self.height_size)
-        cur = QCursor.pos(); start_x, start_y = cur.x(), cur.y()
+        self._update_scrollbar_theme();
+        self.add_buttons(self.layout);
+        self.update_button_styles(self.layout)
+        self._build_html_toolbar();
+        self._update_relative_size();
+        self.setFixedSize(self.width_size, self.height_size)
+        cur = QCursor.pos();
+        start_x, start_y = cur.x(), cur.y()
         end_x, end_y = start_x - self.width_size, start_y - self.height_size
         self.animation.setStartValue(QRect(start_x, start_y + 50, self.width_size, self.height_size))
         self.animation.setEndValue(QRect(end_x, end_y, self.width_size, self.height_size))
-        self.animation.start(); self.show(); self.activateWindow()
+        self.animation.start();
+        self.show();
+        self.activateWindow()
 
     def closeEvent(self, event):
-        event.ignore(); self.hide()
+        event.ignore();
+        self.hide()
 
 
 class MainAppWindow(QMainWindow, ButtonContentMixin):
     def __init__(self, app, popup=None):
         super().__init__()
         self.setWindowIcon(QIcon("ProgrammIcon.ico") if os.path.exists("ProgrammIcon.ico") else QIcon())
-        self.app = app; self.popup = popup
-        self._update_relative_size(); self.setMinimumSize(self.width_size, self.height_size)
+        self.app = app;
+        self.popup = popup
+        self._update_relative_size();
+        self.setMinimumSize(self.width_size, self.height_size)
 
         self._search_query = ""
 
-        self.central = QWidget(); self.central_layout = QVBoxLayout(self.central)
-        self.central_layout.setContentsMargins(0,0,0,0)
+        self.central = QWidget();
+        self.central_layout = QVBoxLayout(self.central)
+        self.central_layout.setContentsMargins(0, 0, 0, 0)
 
         toolbar = QHBoxLayout()
         self.html_toolbar = QWebEngineView() if WEBENGINE_AVAILABLE else QWidget()
@@ -824,7 +909,8 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             try:
                 self.html_toolbar.page().setBackgroundColor(Qt.transparent)
                 self.html_toolbar.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
-            except Exception: pass
+            except Exception:
+                pass
 
         self.show_explorer_btn = False
         self._build_html_toolbar()
@@ -834,7 +920,8 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                 self.bridge = ThemeBridge(main_window=self, popup=self.popup)
                 self.channel.registerObject("bridge", self.bridge)
                 self.html_toolbar.page().setWebChannel(self.channel)
-            except Exception: pass
+            except Exception:
+                pass
 
         if WEBENGINE_AVAILABLE:
             self.html_toolbar.setFixedHeight(44)
@@ -848,27 +935,29 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             self.search_input.setStyleSheet(f"""
                    QLineEdit {{
                        background: {'#292929' if is_dark() else '#ffffff'};
-                       color: {'#ffffff' if is_dark() else '#3a3a3a'};
+color: {'#ffffff' if is_dark() else '#3a3a3a'};
                        padding: 8px 10px;
                        border-radius: 12px;
                        border: 1.5px solid {'#777777' if is_dark() else '#888888'};
-                       outline: none;
+outline: none;
                        transition: all 0.3s cubic-bezier(0.19, 1, 0.22, 1);
                        box-shadow: 0px 0px 20px -18px;
-                   }}
+}}
                    QLineEdit:hover {{
                        border: 2px solid #555555;
-                       box-shadow: 0px 0px 20px -17px;
+box-shadow: 0px 0px 20px -17px;
                    }}
                    QLineEdit:active {{
                        transform: scale(0.95);
-                   }}
+}}
                    QLineEdit:focus {{
                        border: 2px solid grey;
-                   }}
+}}
                """)
 
-        toolbar.addWidget(self.html_toolbar); toolbar.addStretch(); toolbar.addWidget(self.search_input)
+        toolbar.addWidget(self.html_toolbar);
+        toolbar.addStretch();
+        toolbar.addWidget(self.search_input)
 
         # --- Beenden-Button ---
         self.exit_button = QPushButton("Beenden")
@@ -891,36 +980,58 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.exit_button.clicked.connect(self.app.quit)
         toolbar.addWidget(self.exit_button)
 
-        tb = QWidget(); tb.setLayout(toolbar); self.central_layout.addWidget(tb)
+        tb = QWidget();
+        tb.setLayout(toolbar);
+        self.central_layout.addWidget(tb)
 
         self.pages = QStackedWidget()
 
         self.button_container = QWidget()
-        self.layout = QVBoxLayout(self.button_container); self.layout.setContentsMargins(0,0,0,0); self.layout.setSpacing(0)
+        self.layout = QVBoxLayout(self.button_container);
+        self.layout.setContentsMargins(0, 0, 0, 0);
+        self.layout.setSpacing(0)
 
-        self.scroll_area = QScrollArea(); self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setFrameShape(QScrollArea.NoFrame); self._update_scrollbar_theme()
+        self.scroll_area = QScrollArea();
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QScrollArea.NoFrame);
+        self._update_scrollbar_theme()
         self.scroll_area.setWidget(self.button_container)
 
-        self.pages.addWidget(self.scroll_area); self.central_layout.addWidget(self.pages)
+        self.pages.addWidget(self.scroll_area);
+
+        # --- TAB WIDGET for Main Window Plugins ---
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setTabsClosable(True)
+        self.tab_widget.setDocumentMode(True)
+        self.tab_widget.setMovable(True)
+        self.tab_widget.tabBar().setDrawBase(False)  # Clean look without base line
+        self.tab_widget.tabCloseRequested.connect(self.close_tab)
+        self.pages.addWidget(self.tab_widget)
+
+        self.central_layout.addWidget(self.pages)
         self.setCentralWidget(self.central)
 
-        self.init_button_state(); self.add_buttons(self.layout)
+        self.init_button_state();
+        self.add_buttons(self.layout)
         self.set_plugin_loader(self.load_plugin_from_path)
+        self._update_tab_style()
 
-    def _safe_close_active_page(self):
-        if self.pages.currentWidget() is self.scroll_area: return
-        page_widget = self.pages.currentWidget()
-        if not page_widget: return
+    def close_tab(self, index):
+        widget = self.tab_widget.widget(index)
+        self.tab_widget.removeTab(index)
+
+        # Plugin aufräumen / stoppen
         if WEBENGINE_AVAILABLE:
-            try:
-                for view in page_widget.findChildren(QWebEngineView):
-                    try: view.load(QUrl("about:blank"))
-                    except Exception: pass
-            except Exception: pass
-        try: self.pages.removeWidget(page_widget)
-        except Exception: pass
-        page_widget.setParent(None); QTimer.singleShot(0, page_widget.deleteLater)
+            for view in widget.findChildren(QWebEngineView):
+                try:
+                    view.load(QUrl("about:blank"))
+                except Exception:
+                    pass
+        widget.deleteLater()
+
+        # Wenn keine Tabs mehr da sind, zurück zum Explorer
+        if self.tab_widget.count() == 0:
+            self.go_back_to_explorer()
 
     def search_plugins(self):
         self._search_query = (self.search_input.text() or "").strip().lower()
@@ -929,19 +1040,33 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
     def _open_link_as_plugin(self, qurl: QUrl):
         try:
             if qurl.isLocalFile():
-                self.load_plugin_from_path(qurl.toLocalFile(), source_widget=self); return
-            page = QWidget(); v = QVBoxLayout(page); v.setContentsMargins(12,12,12,12); v.setSpacing(8)
+                self.load_plugin_from_path(qurl.toLocalFile(), source_widget=self);
+                return
+            page = QWidget();
+            v = QVBoxLayout(page);
+            v.setContentsMargins(12, 12, 12, 12);
+            v.setSpacing(8)
             if WEBENGINE_AVAILABLE:
                 view = QWebEngineView(page)
-                try: view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
-                except Exception: pass
+                try:
+                    view.page().settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
+                except Exception:
+                    pass
                 view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-                view.load(qurl); v.addWidget(view, 1)
+                view.load(qurl);
+                v.addWidget(view, 1)
             else:
                 v.addWidget(QLabel("PyQtWebEngine nicht verfügbar."))
-            self.pages.addWidget(page); self.pages.setCurrentWidget(page)
-            self.show_explorer_btn = True; self._build_html_toolbar()
-            if WEBENGINE_AVAILABLE: safe_run_js(self.html_toolbar, f'window.setThemeUI && window.setThemeUI("{theme}");')
+
+            # Öffne als Tab statt Page Stack Widget ersetzen
+            self.tab_widget.addTab(page, "Link")
+            self.tab_widget.setCurrentWidget(page)
+            self.pages.setCurrentWidget(self.tab_widget)
+
+            self.show_explorer_btn = True;
+            self._build_html_toolbar()
+            if WEBENGINE_AVAILABLE: safe_run_js(self.html_toolbar,
+                                                f'window.setThemeUI && window.setThemeUI("{theme}");')
         except Exception as e:
             QMessageBox.critical(self, "Link öffnen fehlgeschlagen", str(e))
 
@@ -955,24 +1080,72 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             QScrollBar::handle:vertical {{
                 background: #666; min-height: 20px; border-radius: 5px;
             }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ background: none; height: 0; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical 
+{{ background: none; height: 0; }}
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
+        """)
+
+    def _update_tab_style(self):
+        # Modern Flat/Card Design
+        if is_dark():
+            tab_bg = "#222222"
+            tab_fg = "#AAAAAA"
+            sel_bg = "#3A4A6A"  # Matching the 'Folder' blue-ish tone
+            sel_fg = "#FFFFFF"
+            hover_bg = "#333333"
+            pane_border = "#3A4A6A"
+        else:
+            tab_bg = "#E0E0E0"
+            tab_fg = "#555555"
+            sel_bg = "#c2d1ff"  # Matching the Light 'Folder' tone
+            sel_fg = "#000000"
+            hover_bg = "#EAEAEA"
+            pane_border = "#c2d1ff"
+
+        # Dynamisches Padding und Mindestbreite
+        self.tab_widget.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border-top: 2px solid {pane_border};
+                position: absolute;
+                top: -1px;
+                background: transparent;
+            }}
+            QTabBar::tab {{
+                background: {tab_bg};
+                color: {tab_fg};
+                padding: 8px 20px;
+                margin-right: 4px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                border: none;
+                min-width: 60px; /* Small minimum width */
+            }}
+            QTabBar::tab:selected {{
+                background: {sel_bg};
+                color: {sel_fg};
+                font-weight: bold;
+            }}
+            QTabBar::tab:hover:!selected {{
+                background: {hover_bg};
+            }}
         """)
 
     def _update_searchbar_theme(self):
         self.search_input.setStyleSheet(f"""
             QLineEdit {{
                 background: {'#292929' if is_dark() else '#ffffff'};
-                color: {'#ffffff' if is_dark() else '#292929'};
+color: {'#ffffff' if is_dark() else '#292929'};
                 padding: 8px 10px; border-radius: 12px;
                 border: 1.5px solid {'#777777' if is_dark() else '#888888'};
-                outline: none;
+outline: none;
             }}
         """)
 
     def _update_relative_size(self):
         screen = QGuiApplication.screenAt(self.pos()) or QGuiApplication.primaryScreen()
-        geo = screen.geometry(); self.width_size = int(geo.width()*0.4); self.height_size = int(geo.height()*0.4)
+        geo = screen.geometry();
+        self.width_size = int(geo.width() * 0.4);
+        self.height_size = int(geo.height() * 0.4)
 
     def _build_html_toolbar(self):
         mode = theme
@@ -987,19 +1160,19 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             <style>
                 html, body {{
                     height: 100%;
-                    margin: 0;
+margin: 0;
                     padding: 0;
                 }}
 
                 .toolbar-btn {{
                     padding: 0.25em 0.675em;
-                    border: 0.07em solid transparent;
+border: 0.07em solid transparent;
                     border-radius: 0.38em;
                     font-size: 1em;
                     font-weight: 500;
                     cursor: pointer;
                     transition: background 0.3s, color 0.3s, border-color 0.3s;
-                    min-height: 2.25em;
+min-height: 2.25em;
                     min-width: 5em;
                     background: transparent !important;
                     outline: none;
@@ -1009,26 +1182,26 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
 
                 .toolbar-container {{
                     display: flex;
-                    align-items: center;
+align-items: center;
                     height: 2.5rem;
                     padding: 0 2vw;
                     gap: 0.5em;
                     background: transparent !important;
-                }}
+}}
 
                 /* --- Toggle Switch --- */
                 .switch {{
                   position: relative;
-                  width: 5rem;
+width: 5rem;
                   height: 2.5rem;
                   cursor: pointer;
                   user-select: none;
                   margin-top: 0.4rem;
-                }}
+}}
 
                 .switch input {{
                   position: absolute;
-                  top: 0;
+top: 0;
                   left: 0;
                   width: 100%;
                   height: 100%;
@@ -1036,17 +1209,17 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                   opacity: 0;
                   cursor: pointer;
                   z-index: 3;
-                }}
+}}
 
                 .background {{
                   position: absolute;
-                  width: 5rem;
+width: 5rem;
                   height: 2rem;
                   border-radius: 1.25rem;
                   border: 0.15rem solid #202020;
                   background: linear-gradient(to right, #484848 0%, #202020 100%);
                   transition: all 0.3s;
-                  top: 0;
+top: 0;
                   left: 0;
                   z-index: 1;
                 }}
@@ -1054,18 +1227,18 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                 .stars1,
                 .stars2 {{
                   position: absolute;
-                  height: 0.2rem;
+height: 0.2rem;
                   width: 0.2rem;
                   background: #FFFFFF;
                   border-radius: 50%;
                   transition: 0.3s all ease;
-                }}
+}}
                 .stars1 {{ top: 0.2em; right: 0.8em; }}
                 .stars2 {{ top: 1.3em; right: 1.75em; }}
 
                 .sun-moon {{
                   position: absolute;
-                  left: 0;
+left: 0;
                   top: 0;
                   height: 1.5rem;
                   width: 1.5rem;
@@ -1073,13 +1246,13 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                   background: #FFFDF2;
                   border-radius: 50%;
                   border: 0.15rem solid #DEE2C6;
-                  transition: all 0.5s ease;
+transition: all 0.5s ease;
                   z-index: 2;
                 }}
 
                 .sun-moon .dots {{
                   position: absolute;
-                  top: 0.1em;
+top: 0.1em;
                   left: 0.7em;
                   height: 0.5rem;
                   width: 0.5rem;
@@ -1087,18 +1260,18 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                   border: 0.15rem solid #DEE2C6;
                   border-radius: 50%;
                   transition: 0.4s all ease;
-                }}
+}}
 
                 .switch input:checked ~ .sun-moon {{
                   left: calc(100% - 2rem);
-                  background: #F5EC59;
+background: #F5EC59;
                   border-color: #E7C65C;
                   transform: rotate(-25deg);
                 }}
 
                 .switch input:checked ~ .background {{
                   border: 0.15rem solid #78C1D5;
-                  background: linear-gradient(to right, #78C1D5 0%, #BBE7F5 100%);
+background: linear-gradient(to right, #78C1D5 0%, #BBE7F5 100%);
                 }}
             </style>
         </head>
@@ -1122,24 +1295,23 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
 
                     toggle.addEventListener("change", function() {{
                         bridge.toggleTheme();
-                        if (explorerBtn) {{
+if (explorerBtn) {{
                             if (toggle.checked) {{
                                 explorerBtn.classList.remove('dark');
-                                explorerBtn.classList.add('light');
+explorerBtn.classList.add('light');
                             }} else {{
                                 explorerBtn.classList.remove('light');
-                                explorerBtn.classList.add('dark');
+explorerBtn.classList.add('dark');
                             }}
                         }}
                     }});
-
-                    if (explorerBtn) {{
+if (explorerBtn) {{
                         explorerBtn.onclick = function() {{
                             bridge.goBackToExplorer();
-                        }};
+}};
                     }}
                 }});
-            </script>
+</script>
         </body>
         </html>
         """
@@ -1163,6 +1335,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.update_button_styles(self.layout)
         self._update_scrollbar_theme()
         self._update_searchbar_theme()
+        self._update_tab_style()  # Styles for Tabs update
         if self.popup and self.popup.isVisible():
             self.popup.update_button_styles(self.popup.layout)
             self.popup._update_scrollbar_theme()
@@ -1170,7 +1343,8 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             safe_run_js(self.html_toolbar, f'window.setThemeUI && window.setThemeUI("{theme}");')
 
     def go_back_to_explorer(self):
-        self._safe_close_active_page()
+        # Wir schließen die Tabs NICHT. Wir wechseln nur die Ansicht.
+        # Damit laufen Plugins im Hintergrund weiter.
         self.pages.setCurrentWidget(self.scroll_area)
         self.show_explorer_btn = False
         self._build_html_toolbar()
@@ -1180,36 +1354,77 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
     def load_plugin_from_path(self, path: str, source_widget=None):
         try:
             plugin_mode = "Popup" if isinstance(source_widget, PopupWindow) else "Window"
+
+            # --- POPUP LOGIC (Old logic, no tabs) ---
+            if plugin_mode == "Popup":
+                if path.lower().endswith('.py'):
+                    widget = self.load_python_plugin_widget(path, mode=plugin_mode)
+                    if widget is None: return
+                elif path.lower().endswith('.html'):
+                    widget = HtmlPluginContainer(path)
+                else:
+                    subprocess.Popen([sys.executable, path]);
+                    return
+
+                source_widget.show_plugin_widget(widget, os.path.basename(path))
+                return
+
+            # --- MAIN WINDOW LOGIC (With Tabs) ---
+            # 1. Check if plugin is already running in a tab
+            for i in range(self.tab_widget.count()):
+                w = self.tab_widget.widget(i)
+                if w.property("plugin_path") == path:
+                    # Switch to existing tab
+                    self.tab_widget.setCurrentIndex(i)
+                    self.pages.setCurrentWidget(self.tab_widget)
+                    self.show_explorer_btn = True
+                    self._build_html_toolbar()
+                    if WEBENGINE_AVAILABLE:
+                        safe_run_js(self.html_toolbar, f'window.setThemeUI && window.setThemeUI("{theme}");')
+                    return
+
+            # 2. Load new plugin
             if path.lower().endswith('.py'):
                 widget = self.load_python_plugin_widget(path, mode=plugin_mode)
                 if widget is None: return
             elif path.lower().endswith('.html'):
                 widget = HtmlPluginContainer(path)
             else:
-                subprocess.Popen([sys.executable, path]); return
+                subprocess.Popen([sys.executable, path]);
+                return
 
-            if isinstance(source_widget, PopupWindow):
-                source_widget.show_plugin_widget(widget, os.path.basename(path))
-            else:
-                container = QWidget(); v = QVBoxLayout(container); v.setContentsMargins(12,12,12,12)
-                header = QLabel(f"🧩 Plugin: {os.path.basename(path)}")
-                header.setStyleSheet("font-weight:bold;font-size:15px;margin-bottom:8px;")
-                v.addWidget(header); v.addWidget(widget)
-                self.pages.addWidget(container); self.pages.setCurrentWidget(container)
-                self.show_explorer_btn = True; self._build_html_toolbar()
-                if WEBENGINE_AVAILABLE:
-                    safe_run_js(self.html_toolbar, f'window.setThemeUI && window.setThemeUI("{theme}");')
+            # 3. Add to tabs
+            container = QWidget();
+            v = QVBoxLayout(container);
+            v.setContentsMargins(12, 12, 12, 12)
+            # Im Tab brauchen wir den Header "Plugin: Name" nicht zwingend, da der Tab-Reiter den Namen hat.
+            # Aber wir lassen das Widget sauber im Container.
+            v.addWidget(widget)
+
+            container.setProperty("plugin_path", path)
+            self.tab_widget.addTab(container, os.path.basename(path))
+            self.tab_widget.setCurrentWidget(container)
+
+            self.pages.setCurrentWidget(self.tab_widget)
+            self.show_explorer_btn = True;
+            self._build_html_toolbar()
+            if WEBENGINE_AVAILABLE:
+                safe_run_js(self.html_toolbar, f'window.setThemeUI && window.setThemeUI("{theme}");')
+
         except Exception as e:
             QMessageBox.critical(source_widget or self, "Fehler beim Laden", f"{e}")
 
     def load_python_plugin_widget(self, path: str, mode="Window"):
         try:
             spec = importlib.util.spec_from_file_location("plugin_module", path)
-            mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+            mod = importlib.util.module_from_spec(spec);
+            spec.loader.exec_module(mod)
             cls = getattr(mod, "PluginWidget", None)
             if cls is not None and isinstance(cls, type):
-                try: return cls(mode=mode)
-                except TypeError: return cls()
+                try:
+                    return cls(mode=mode)
+                except TypeError:
+                    return cls()
             return None
         except Exception:
             return None
@@ -1233,26 +1448,37 @@ class TrayApp(QApplication):
     def on_tray_activated(self, reason):
         global mode
         if reason == QSystemTrayIcon.Context:
-            mode = "Popup"; self.popup.show_popup()
+            mode = "Popup";
+            self.popup.show_popup()
         elif reason == QSystemTrayIcon.Trigger:
             if self.main_window.isMinimized() or not self.main_window.isVisible():
-                mode = "Window"; self.main_window.showNormal(); self.main_window.activateWindow(); self.main_window.raise_()
+                mode = "Window";
+                self.main_window.showNormal();
+                self.main_window.activateWindow();
+                self.main_window.raise_()
             else:
-                self.main_window.activateWindow(); self.main_window.raise_()
+                self.main_window.activateWindow();
+                self.main_window.raise_()
 
     def teardown(self):
         try:
-            try: self.tray.activated.disconnect(self.on_tray_activated)
-            except Exception: pass
+            try:
+                self.tray.activated.disconnect(self.on_tray_activated)
+            except Exception:
+                pass
             if WEBENGINE_AVAILABLE:
                 try:
                     if hasattr(self.popup, "html_toolbar"):
-                        self.popup.html_toolbar.hide(); self.popup.html_toolbar.deleteLater()
-                except Exception: pass
+                        self.popup.html_toolbar.hide();
+                        self.popup.html_toolbar.deleteLater()
+                except Exception:
+                    pass
                 try:
                     if hasattr(self.main_window, "html_toolbar"):
-                        self.main_window.html_toolbar.hide(); self.main_window.html_toolbar.deleteLater()
-                except Exception: pass
+                        self.main_window.html_toolbar.hide();
+                        self.main_window.html_toolbar.deleteLater()
+                except Exception:
+                    pass
         except Exception:
             traceback.print_exc()
 
@@ -1260,6 +1486,7 @@ class TrayApp(QApplication):
 if __name__ == "__main__":
     try:
         import ctypes, platform
+
         if platform.system().lower() == "windows":
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(u"meinefirma.skriptstarter.1.0")
     except Exception:
