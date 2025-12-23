@@ -1,6 +1,7 @@
-# --- tray_launcher.py (HTML lightswitch + safe back + search + stability + TABS v2 Design) ---
+# --- tray_launcher.py (HTML lightswitch + safe back + search + stability + TABS v2 + Settings) ---
 
-# TO MAKE EXE OF TRAYLAUNCHER USE FOLLOWING COMMAND IN TERMINAL:    pyinstaller --noconsole --onefile --icon=ProgrammIcon.ico --add-data "scripts;scripts" tray_launcher.py
+# TO MAKE EXE OF TRAYLAUNCHER USE FOLLOWING COMMAND IN TERMINAL:
+# pyinstaller --noconsole --onefile --icon=ProgrammIcon.ico --add-data "scripts;scripts" tray_launcher.py
 
 try:
     import pytz
@@ -21,7 +22,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QSystemTrayIcon, QMainWindow, QSizePolicy, QHBoxLayout, QLabel,
     QStackedWidget, QMessageBox, QScrollArea, QLineEdit, QFileDialog,
-    QTabWidget, QTabBar
+    QTabWidget, QTabBar, QDialog, QRadioButton, QButtonGroup
 )
 from PyQt5.QtGui import QCursor, QIcon, QColor, QGuiApplication
 from PyQt5.QtCore import (
@@ -90,18 +91,18 @@ class InlineInterceptPage(QWebEnginePage):
                 except Exception:
                     pass
 
-                def _cleanup():
-                    try:
-                        if page in self._child_pages:
-                            self._child_pages.remove(page)
-                    except Exception:
-                        pass
-                    try:
-                        page.deleteLater()
-                    except Exception:
-                        pass
+            def _cleanup():
+                try:
+                    if page in self._child_pages:
+                        self._child_pages.remove(page)
+                except Exception:
+                    pass
+                try:
+                    page.deleteLater()
+                except Exception:
+                    pass
 
-                QTimer.singleShot(0, _cleanup)
+            QTimer.singleShot(0, _cleanup)
 
         page.urlChanged.connect(_on_url_changed)
         return page
@@ -233,17 +234,17 @@ class HtmlInlineButton(QWidget):
         self.src_path = os.path.abspath(path)
         self.compact = compact
 
-        probe = QPushButton("Wg");
+        probe = QPushButton("Wg")
         base_h = max(28, probe.sizeHint().height())
         factor = 1.8 if not compact else 2.4
-        target_h = int(base_h * factor);
-        top = max(4, target_h // 8);
+        target_h = int(base_h * factor)
+        top = max(4, target_h // 8)
         bot = max(4, target_h // 8)
-        self.setMinimumHeight(target_h);
+        self.setMinimumHeight(target_h)
         self.setMaximumHeight(target_h)
 
-        outer = QVBoxLayout(self);
-        outer.setContentsMargins(8, top, 8, bot);
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, top, 8, bot)
         outer.setSpacing(0)
 
         if WEBENGINE_AVAILABLE:
@@ -257,7 +258,7 @@ class HtmlInlineButton(QWidget):
                     if host and callable(getattr(host, "_open_link_as_plugin", None)):
                         host._open_link_as_plugin(qurl)
                     else:
-                        import webbrowser;
+                        import webbrowser
                         webbrowser.open(qurl.toString())
 
                 self._page = InlineInterceptPage(on_open_link=_handle_open_link, parent=self.view)
@@ -290,7 +291,7 @@ class HtmlInlineButton(QWidget):
                     url = QUrl.fromLocalFile(self.src_path)
                     if url.hasQuery():
                         parts = [p for p in url.query().split("&") if not p.startswith("mode=")]
-                        parts.append(f"mode={mode_val}");
+                        parts.append(f"mode={mode_val}")
                         url.setQuery("&".join(parts))
                     else:
                         url.setQuery(f"mode={mode_val}")
@@ -310,7 +311,7 @@ class HtmlInlineButton(QWidget):
                     base = QUrl.fromLocalFile(os.path.dirname(self.src_path) + os.sep)
                     self.view.setHtml(html, baseUrl=base)
             except Exception:
-                print("HtmlInlineButton init error:", traceback.format_exc());
+                print("HtmlInlineButton init error:", traceback.format_exc())
                 self._fallback_area(outer)
         else:
             self._fallback_area(outer)
@@ -318,7 +319,7 @@ class HtmlInlineButton(QWidget):
     def _load_inline_html_from_py(self, file_path: str, mode: str) -> str:
         try:
             spec = importlib.util.spec_from_file_location("inline_html_module", file_path)
-            mod = importlib.util.module_from_spec(spec);
+            mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)  # type: ignore
             fn = getattr(mod, "get_inline_html", None)
             if not callable(fn):
@@ -349,7 +350,8 @@ window.addEventListener('keydown', e => {{ const blocked=['ArrowUp','ArrowDown',
             if et in (QEvent.Wheel, QEvent.Gesture, QEvent.NativeGesture): return True
             if et == QEvent.KeyPress:
                 try:
-                    key = event.key(); mods = event.modifiers()
+                    key = event.key();
+                    mods = event.modifiers()
                 except Exception:
                     key, mods = None, 0
                 if mods & Qt.ControlModifier: return True
@@ -366,27 +368,83 @@ window.addEventListener('keydown', e => {{ const blocked=['ArrowUp','ArrowDown',
 QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
 QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
 
-# --- Theme globals ---
-theme = "dark"  # "dark" | "light"
+# --- Theme & Global Config ---
+theme = "dark"
 mode = "Window"
+use_glass_mode = True  # Default: Glas an (damit auch forced Dark Mode)
 
 
-def is_dark(): return theme == "dark"
+def is_dark():
+    # Wenn Glas an ist, ist es immer Dark für die UI-Logik
+    if use_glass_mode:
+        return True
+    return theme == "dark"
 
 
 def current_stylesheet():
-    return """
-        QWidget { background-color: #2E2E2E; color: #FFFFFF; }
-    """ if is_dark() else """
-        QWidget { background-color: #FFFFFF; color: #000000; }
-    """
+    if use_glass_mode:
+        # Glas/Transparent Basis -> Text weiß
+        return "QWidget { background-color: transparent; color: #FFFFFF; }"
+    else:
+        # Opaque Basis
+        if is_dark():
+            return "QWidget { background-color: #2E2E2E; color: #FFFFFF; }"
+        else:
+            return "QWidget { background-color: #F0F0F0; color: #000000; }"
+
+
+def glass_css():
+    """Liefert CSS für Container: Entweder Glas (nur Dark) oder Opaque (Dark/Light)."""
+    if use_glass_mode:
+        # Transparenter Glas-Look (nur Dark Mode erlaubt)
+        return ("background: rgba(18,18,22,0.55);"
+                "border: 1px solid rgba(255,255,255,0.08);"
+                "border-radius: 14px;")
+    else:
+        # Opaque / Solide Styles
+        if theme == "light":
+            # Hell & Solide
+            return ("background: #FFFFFF;"
+                    "border: 1px solid #CCC;"
+                    "border-radius: 14px; color: #333;")
+        else:
+            # Dunkel & Solide
+            return ("background: #2E2E2E;"
+                    "border: 1px solid #444;"
+                    "border-radius: 14px; color: #FFF;")
+
+
+def glass_button_css():
+    """Button-Look (Base, Hover) abhängig von Modus."""
+    if use_glass_mode:
+        # Glas Dark
+        base = ("background: rgba(255,255,255,0.08);"
+                "color: #f1f1f1;"
+                "border: 1px solid rgba(255,255,255,0.12);"
+                "border-radius: 10px;")
+        hover = "background: rgba(255,255,255,0.14);"
+    else:
+        # Opaque
+        if theme == "light":
+            base = ("background: #E0E0E0;"
+                    "color: #1a1a1a;"
+                    "border: 1px solid #BBB;"
+                    "border-radius: 10px;")
+            hover = "background: #D0D0D0;"
+        else:
+            base = ("background: #3E3E3E;"
+                    "color: #f1f1f1;"
+                    "border: 1px solid #555;"
+                    "border-radius: 10px;")
+            hover = "background: #4E4E4E;"
+    return base, hover
 
 
 def set_theme(new_theme, app=None):
     global theme
     theme = new_theme
+    # Property setzen, damit Listener reagieren
     if app is not None:
-        app.setStyleSheet(current_stylesheet())
         app.setProperty("toolbar_theme", theme)
     else:
         inst = QApplication.instance()
@@ -488,12 +546,12 @@ class ButtonContentMixin:
 
     def add_buttons(self, layout):
         for i in reversed(range(layout.count())):
-            it = layout.itemAt(i);
+            it = layout.itemAt(i)
             w = it.widget() if it else None
             if w: w.setParent(None)
 
-        layout.setSpacing(0);
-        layout.setContentsMargins(0, 0, 0, 0);
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setAlignment(Qt.AlignTop)
 
         if self.current_path != os.path.abspath(self.SCRIPT_FOLDER):
@@ -501,8 +559,6 @@ class ButtonContentMixin:
             back_button.clicked.connect(self.go_back)
             back_button.setObjectName("back_button")
             layout.addWidget(back_button)
-
-        # Header (Favoriten/… weggelassen, Fokus: Stabilität & Suche)
 
         try:
             raw_entries = os.listdir(self.current_path)
@@ -594,12 +650,13 @@ class ButtonContentMixin:
                 if path.endswith('.py'):
                     subprocess.Popen([sys.executable, path])
                 elif path.endswith('.html'):
-                    import webbrowser;
+                    import webbrowser
                     webbrowser.open('file://' + os.path.abspath(path))
         except Exception:
             print("Skriptstart fehlgeschlagen:", traceback.format_exc())
 
     def update_button_styles(self, layout):
+        base_btn, hover_btn = glass_button_css()
         for i in range(layout.count()):
             w = layout.itemAt(i).widget()
             if isinstance(w, QPushButton):
@@ -607,31 +664,39 @@ class ButtonContentMixin:
                     w.setMinimumHeight(40)
                     w.setStyleSheet(f"""
                         QPushButton {{
-                            background-color: {'#666666' if is_dark() else '#BBBBBB'};
-                            color: {'#FFFFFF' if is_dark() else '#000000'};
-                            font-weight: bold;
+                            {base_btn}
+                            font-weight: 600;
+                            padding: 8px 12px;
                         }}
-                        QPushButton:hover {{ background-color: {'#777777' if is_dark() else '#CCCCCC'}; }}
+                        QPushButton:hover {{ {hover_btn} }}
                     """)
                 else:
                     entry_type = w.property("entry_type")
                     if entry_type == "folder":
                         w.setStyleSheet(f"""
-                            QPushButton {{ background-color: {'#3A4A6A' if is_dark() else '#c2d1ff'};
-color: {'#fff' if is_dark() else '#000'}; }}
-                            QPushButton:hover {{ background-color: {'#4B5B6B' if is_dark() else '#a1b8ff'};
-}}
+                            QPushButton {{
+                                {base_btn}
+                                font-weight: 600;
+                            }}
+                            QPushButton:hover {{ {hover_btn} }}
                         """)
                     elif entry_type == "file":
                         w.setStyleSheet(f"""
-                            QPushButton {{ background-color: {'#3A3A3A' if is_dark() else '#EEEEEE'}; color: {'#fff' if is_dark() else '#000'}; }}
-                            QPushButton:hover {{ background-color: {'#505050' if is_dark() else '#CCCCCC'}; }}
+                            QPushButton {{
+                                {base_btn}
+                            }}
+                            QPushButton:hover {{ {hover_btn} }}
                         """)
             else:
                 if w and w.property("entry_type") == "file_html_inline":
                     w.setStyleSheet(f"""
-                        QWidget {{ background-color: {'#354A3A' if is_dark() else '#d5f0d9'}; color: {'#fff' if is_dark() else '#000'}; border-radius: 8px; padding: 8px; }}
-                        QWidget:hover {{ background-color: {'#456A4B' if is_dark() else '#bfe8c6'}; }}
+                        QWidget {{
+                            {glass_css()}
+                            padding: 8px;
+                        }}
+                        QWidget:hover {{
+                            background: {'rgba(255,255,255,0.18)' if is_dark() else 'rgba(0,0,0,0.05)'};
+                        }}
                     """)
 
 
@@ -669,6 +734,9 @@ class ThemeBridge(QObject):
 
     @pyqtSlot()
     def toggleTheme(self):
+        # Wenn Glass Mode aktiv ist, ignorieren wir das Toggle, da Light Mode im Glass Mode unerwünscht ist.
+        if use_glass_mode:
+            return
         if self.main_window:
             self.main_window.toggle_theme()
 
@@ -680,12 +748,75 @@ class ThemeBridge(QObject):
             self.main_window.go_back_to_explorer()
 
 
+# --- SETTINGS DIALOG ---
+class SettingsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Einstellungen")
+        self.setFixedSize(300, 200)
+        self.setStyleSheet("""
+            QDialog { background: #333; color: #FFF; }
+            QRadioButton { color: #FFF; font-size: 14px; padding: 5px; }
+            QPushButton { background: #555; color: #FFF; border: 1px solid #777; padding: 6px; border-radius: 4px; }
+            QPushButton:hover { background: #666; }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Design-Modus wählen:", self))
+
+        self.group = QButtonGroup(self)
+
+        self.rb_opaque = QRadioButton("Klassisch (Opaque)\n[Light & Dark möglich]")
+        self.rb_glass = QRadioButton("Transparent (Glas)\n[Nur Dark Mode]")
+
+        self.group.addButton(self.rb_opaque)
+        self.group.addButton(self.rb_glass)
+        layout.addWidget(self.rb_opaque)
+        layout.addWidget(self.rb_glass)
+
+        # Set current state
+        if use_glass_mode:
+            self.rb_glass.setChecked(True)
+        else:
+            self.rb_opaque.setChecked(True)
+
+        layout.addStretch()
+
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("Speichern")
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.clicked.connect(self.reject)
+
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+    def accept(self):
+        global use_glass_mode, theme
+        old_glass = use_glass_mode
+
+        if self.rb_glass.isChecked():
+            use_glass_mode = True
+            theme = "dark"  # Force Dark
+        else:
+            use_glass_mode = False
+            # Theme beibehalten oder default
+
+        super().accept()
+
+        # Trigger update on parent
+        if self.parent() and hasattr(self.parent(), "refresh_all_styles"):
+            self.parent().refresh_all_styles()
+
+
 class PopupWindow(ButtonContentMixin, QWidget):
     def __init__(self, app=None):
         super().__init__()
         self.IS_POPUP = True
         self.app = app
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
 
         self.channel = None
         self.bridge = ThemeBridge(main_window=None, popup=self)
@@ -727,6 +858,11 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.main_layout.addWidget(self.html_toolbar);
         self.main_layout.addWidget(self.pages)
 
+        # Initiale Styles
+        self.setStyleSheet("")
+        self.explorer_container.setStyleSheet(glass_css())
+        self.pages.setStyleSheet("background: transparent;")
+
         self._update_relative_size();
         self.setFixedSize(self.width_size, self.height_size)
 
@@ -758,11 +894,11 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.scroll_area.setStyleSheet(f"""
             QScrollArea {{ background: transparent; }}
             QScrollBar:vertical {{
-                background: {'#292929' if is_dark() else '#d6d6d6'};
+                background: rgba(0,0,0,0.04);
                 width: 10px; margin: 0; border-radius: 5px;
             }}
             QScrollBar::handle:vertical {{
-                background: {'#666' if is_dark() else '#999'};
+                background: {'rgba(255,255,255,0.28)' if is_dark() else 'rgba(0,0,0,0.25)'};
                 min-height: 20px; border-radius: 5px;
             }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ background: none; height: 0; }}
@@ -791,7 +927,7 @@ class PopupWindow(ButtonContentMixin, QWidget):
                 .toolbar-container {{
                     display: flex;
                     align-items: center;
-                    justify-content: flex-start; /* linksorientiert */
+                    justify-content: flex-start;
                     height: 32px;
                     padding: 0 8px;
                     gap: 8px;
@@ -823,11 +959,9 @@ class PopupWindow(ButtonContentMixin, QWidget):
                     window.bridge = channel.objects.bridge;
                     const eb = document.getElementById("explorerBtn");
                     if (eb) eb.onclick = function() {{ bridge.goBackToExplorer(); }};
-                    const themeBtn = document.getElementById("themeBtn");
-                    if (themeBtn) themeBtn.onclick = function() {{ bridge.toggleTheme(); }};
                 }});
                 window.setBtnMode = function(m) {{
-                    ['explorerBtn','themeBtn'].forEach(function(id){{
+                    ['explorerBtn'].forEach(function(id){{
                         var el = document.getElementById(id);
                         if (el) el.className = "toolbar-btn " + m;
                     }});
@@ -860,13 +994,6 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self.pages.setCurrentWidget(self.scroll_area)
         if WEBENGINE_AVAILABLE: self.html_toolbar.setVisible(False)
 
-    def toggle_theme(self):
-        global theme
-        theme = "light" if is_dark() else "dark"
-        set_theme(theme, self.app)
-        self.update_button_styles(self.layout)
-        safe_run_js(self.html_toolbar, f'window.setThemeUI && window.setThemeUI("{theme}");')
-
     def show_popup(self):
         self._update_scrollbar_theme();
         self.add_buttons(self.layout);
@@ -874,6 +1001,10 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self._build_html_toolbar();
         self._update_relative_size();
         self.setFixedSize(self.width_size, self.height_size)
+
+        # Styles aktualisieren je nach Modus
+        self.explorer_container.setStyleSheet(glass_css())
+
         cur = QCursor.pos();
         start_x, start_y = cur.x(), cur.y()
         end_x, end_y = start_x - self.width_size, start_y - self.height_size
@@ -896,6 +1027,10 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.popup = popup
         self._update_relative_size();
         self.setMinimumSize(self.width_size, self.height_size)
+
+        # Translucent Attribut ist wichtig für Glas-Modus
+        # Im Opaque Modus stört es nicht zwingend, aber wir müssen den Background dann solid malen.
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
 
         self._search_query = ""
 
@@ -927,57 +1062,30 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
             self.html_toolbar.setFixedHeight(44)
             self.html_toolbar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
-            # --- Suchfeld (oben rechts) ---
-            self.search_input = QLineEdit()
-            self.search_input.setPlaceholderText("Search plugins...")
-            self.search_input.setFixedHeight(max(28, int(self.height_size * 0.08)))
-            self.search_input.setFixedWidth(220)  # FIXED WIDTH OF SEARCH BAR
-            self.search_input.setStyleSheet(f"""
-                   QLineEdit {{
-                       background: {'#292929' if is_dark() else '#ffffff'};
-color: {'#ffffff' if is_dark() else '#3a3a3a'};
-                       padding: 8px 10px;
-                       border-radius: 12px;
-                       border: 1.5px solid {'#777777' if is_dark() else '#888888'};
-outline: none;
-                       transition: all 0.3s cubic-bezier(0.19, 1, 0.22, 1);
-                       box-shadow: 0px 0px 20px -18px;
-}}
-                   QLineEdit:hover {{
-                       border: 2px solid #555555;
-box-shadow: 0px 0px 20px -17px;
-                   }}
-                   QLineEdit:active {{
-                       transform: scale(0.95);
-}}
-                   QLineEdit:focus {{
-                       border: 2px solid grey;
-}}
-               """)
+        # --- Suchfeld ---
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search plugins...")
+        self.search_input.setFixedHeight(max(28, int(self.height_size * 0.08)))
+        self.search_input.setFixedWidth(220)
+        self._update_searchbar_theme()
 
         toolbar.addWidget(self.html_toolbar);
         toolbar.addStretch();
         toolbar.addWidget(self.search_input)
 
+        # --- Settings Button ---
+        self.settings_button = QPushButton("⚙️")
+        self.settings_button.setFixedHeight(max(28, int(self.height_size * 0.08)))
+        self.settings_button.setFixedWidth(40)
+        self.settings_button.clicked.connect(self.open_settings)
+        self._update_settings_btn_style()
+        toolbar.addWidget(self.settings_button)
+
         # --- Beenden-Button ---
         self.exit_button = QPushButton("Beenden")
         self.exit_button.setFixedHeight(max(28, int(self.height_size * 0.08)))
-        self.exit_button.setStyleSheet(f"""
-                            QPushButton {{
-                                background-color: {'#aa3333' if is_dark() else '#ff5555'};
-                                color: white;
-                                font-weight: bold;
-                                border: none;
-                                border-radius: 10px;
-                                padding: 6px 12px;
-                            }}
-                            QPushButton:hover {{
-                                background-color: {'#cc4444' if is_dark() else '#ff6666'};
-                            }}
-                        """)
-        # 🧠 Option 1: Sauber beenden
         self.exit_button.clicked.connect(self.app.quit)
-        self.exit_button.clicked.connect(self.app.quit)
+        self._update_exit_btn_style()
         toolbar.addWidget(self.exit_button)
 
         tb = QWidget();
@@ -987,6 +1095,12 @@ box-shadow: 0px 0px 20px -17px;
         self.pages = QStackedWidget()
 
         self.button_container = QWidget()
+
+        # Styles anwenden
+        self.central.setStyleSheet(glass_css())
+        self.button_container.setStyleSheet(glass_css())
+        self.pages.setStyleSheet("background: transparent;")
+
         self.layout = QVBoxLayout(self.button_container);
         self.layout.setContentsMargins(0, 0, 0, 0);
         self.layout.setSpacing(0)
@@ -999,12 +1113,11 @@ box-shadow: 0px 0px 20px -17px;
 
         self.pages.addWidget(self.scroll_area);
 
-        # --- TAB WIDGET for Main Window Plugins ---
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabsClosable(True)
         self.tab_widget.setDocumentMode(True)
         self.tab_widget.setMovable(True)
-        self.tab_widget.tabBar().setDrawBase(False)  # Clean look without base line
+        self.tab_widget.tabBar().setDrawBase(False)
         self.tab_widget.tabCloseRequested.connect(self.close_tab)
         self.pages.addWidget(self.tab_widget)
 
@@ -1016,11 +1129,79 @@ box-shadow: 0px 0px 20px -17px;
         self.set_plugin_loader(self.load_plugin_from_path)
         self._update_tab_style()
 
+        # Initial Searchbar Event
+        self.search_input.textChanged.connect(self.search_plugins)
+
+    def open_settings(self):
+        dlg = SettingsDialog(self)
+        dlg.exec_()
+
+    def refresh_all_styles(self):
+        # Wird vom SettingsDialog aufgerufen
+        set_theme(theme, self.app)
+
+        # 1. Update CSS Vars
+        self.central.setStyleSheet(glass_css())
+        self.button_container.setStyleSheet(glass_css())
+
+        # 2. Update Element Styles
+        self.update_button_styles(self.layout)
+        self._update_searchbar_theme()
+        self._update_exit_btn_style()
+        self._update_settings_btn_style()
+        self._update_tab_style()
+        self._update_scrollbar_theme()
+
+        # 3. Update HTML Toolbar (Hide Toggle if Glass Mode)
+        self._build_html_toolbar()
+
+        if WEBENGINE_AVAILABLE:
+            safe_run_js(self.html_toolbar, f'window.setThemeUI && window.setThemeUI("{theme}");')
+
+        # 4. Popup Refresh if active
+        if self.popup:
+            self.popup.explorer_container.setStyleSheet(glass_css())
+            self.popup.update_button_styles(self.popup.layout)
+            self.popup._update_scrollbar_theme()
+
+    def _update_settings_btn_style(self):
+        if use_glass_mode:
+            self.settings_button.setStyleSheet(f"""
+                QPushButton {{
+                    background: rgba(255,255,255,0.1); color: #fff;
+                    border: 1px solid rgba(255,255,255,0.2); border-radius: 10px; font-size: 16px;
+                }}
+                QPushButton:hover {{ background: rgba(255,255,255,0.2); }}
+            """)
+        else:
+            self.settings_button.setStyleSheet(f"""
+                QPushButton {{
+                    background: {'#444' if is_dark() else '#DDD'}; 
+                    color: {'#FFF' if is_dark() else '#333'};
+                    border: 1px solid {'#666' if is_dark() else '#AAA'};
+                    border-radius: 10px; font-size: 16px;
+                }}
+                QPushButton:hover {{ background: {'#555' if is_dark() else '#CCC'}; }}
+            """)
+
+    def _update_exit_btn_style(self):
+        self.exit_button.setStyleSheet(f"""
+            QPushButton {{
+                background: {'rgba(255,90,90,0.18)' if is_dark() else 'rgba(255,90,90,0.16)'};
+                color: {'#ffecec' if is_dark() else '#3a1a1a'};
+                font-weight: 700;
+                border: 1px solid {'rgba(255,120,120,0.35)' if is_dark() else 'rgba(255,120,120,0.32)'};
+                border-radius: 10px;
+                padding: 6px 12px;
+            }}
+            QPushButton:hover {{
+                background: {'rgba(255,90,90,0.28)' if is_dark() else 'rgba(255,90,90,0.24)'};
+            }}
+        """)
+
     def close_tab(self, index):
         widget = self.tab_widget.widget(index)
         self.tab_widget.removeTab(index)
-
-        # Plugin aufräumen / stoppen
         if WEBENGINE_AVAILABLE:
             for view in widget.findChildren(QWebEngineView):
                 try:
@@ -1028,8 +1209,6 @@ box-shadow: 0px 0px 20px -17px;
                 except Exception:
                     pass
         widget.deleteLater()
-
-        # Wenn keine Tabs mehr da sind, zurück zum Explorer
         if self.tab_widget.count() == 0:
             self.go_back_to_explorer()
 
@@ -1057,12 +1236,9 @@ box-shadow: 0px 0px 20px -17px;
                 v.addWidget(view, 1)
             else:
                 v.addWidget(QLabel("PyQtWebEngine nicht verfügbar."))
-
-            # Öffne als Tab statt Page Stack Widget ersetzen
             self.tab_widget.addTab(page, "Link")
             self.tab_widget.setCurrentWidget(page)
             self.pages.setCurrentWidget(self.tab_widget)
-
             self.show_explorer_btn = True;
             self._build_html_toolbar()
             if WEBENGINE_AVAILABLE: safe_run_js(self.html_toolbar,
@@ -1074,72 +1250,63 @@ box-shadow: 0px 0px 20px -17px;
         self.scroll_area.setStyleSheet(f"""
             QScrollArea {{ background: transparent; }}
             QScrollBar:vertical {{
-                background: {'#292929' if is_dark() else '#ffffff'};
+                background: rgba(0,0,0,0.04);
                 width: 10px; margin: 0; border-radius: 5px;
             }}
             QScrollBar::handle:vertical {{
-                background: #666; min-height: 20px; border-radius: 5px;
+                background: {'rgba(255,255,255,0.28)' if is_dark() else 'rgba(0,0,0,0.25)'}; min-height: 20px; border-radius: 5px;
             }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical 
-{{ background: none; height: 0; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ background: none; height: 0; }}
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
         """)
 
     def _update_tab_style(self):
-        # Modern Flat/Card Design
         if is_dark():
-            tab_bg = "#222222"
-            tab_fg = "#AAAAAA"
-            sel_bg = "#3A4A6A"  # Matching the 'Folder' blue-ish tone
-            sel_fg = "#FFFFFF"
-            hover_bg = "#333333"
+            tab_bg = "#222222";
+            tab_fg = "#AAAAAA";
+            sel_bg = "#3A4A6A";
+            sel_fg = "#FFFFFF";
+            hover_bg = "#333333";
             pane_border = "#3A4A6A"
         else:
-            tab_bg = "#E0E0E0"
-            tab_fg = "#555555"
-            sel_bg = "#c2d1ff"  # Matching the Light 'Folder' tone
-            sel_fg = "#000000"
-            hover_bg = "#EAEAEA"
+            tab_bg = "#E0E0E0";
+            tab_fg = "#555555";
+            sel_bg = "#c2d1ff";
+            sel_fg = "#000000";
+            hover_bg = "#EAEAEA";
             pane_border = "#c2d1ff"
 
-        # Dynamisches Padding und Mindestbreite
         self.tab_widget.setStyleSheet(f"""
-            QTabWidget::pane {{
-                border-top: 2px solid {pane_border};
-                position: absolute;
-                top: -1px;
-                background: transparent;
-            }}
+            QTabWidget::pane {{ border-top: 2px solid {pane_border}; position: absolute; top: -1px; background: transparent; }}
             QTabBar::tab {{
-                background: {tab_bg};
-                color: {tab_fg};
-                padding: 8px 20px;
-                margin-right: 4px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                border: none;
-                min-width: 60px; /* Small minimum width */
+                background: {tab_bg}; color: {tab_fg}; padding: 8px 20px; margin-right: 4px;
+                border-top-left-radius: 8px; border-top-right-radius: 8px; border: none; min-width: 60px;
             }}
-            QTabBar::tab:selected {{
-                background: {sel_bg};
-                color: {sel_fg};
-                font-weight: bold;
-            }}
-            QTabBar::tab:hover:!selected {{
-                background: {hover_bg};
-            }}
+            QTabBar::tab:selected {{ background: {sel_bg}; color: {sel_fg}; font-weight: bold; }}
+            QTabBar::tab:hover:!selected {{ background: {hover_bg}; }}
         """)
 
     def _update_searchbar_theme(self):
-        self.search_input.setStyleSheet(f"""
-            QLineEdit {{
-                background: {'#292929' if is_dark() else '#ffffff'};
-color: {'#ffffff' if is_dark() else '#292929'};
-                padding: 8px 10px; border-radius: 12px;
-                border: 1.5px solid {'#777777' if is_dark() else '#888888'};
-outline: none;
-            }}
-        """)
+        if use_glass_mode:
+            # Glas Style
+            self.search_input.setStyleSheet(f"""
+                QLineEdit {{
+                    background: #292929; color: #ffffff;
+                    padding: 8px 10px; border-radius: 12px;
+                    border: 1.5px solid #777777; outline: none;
+                }}
+            """)
+        else:
+            # Opaque Style
+            self.search_input.setStyleSheet(f"""
+                QLineEdit {{
+                    background: {'#292929' if is_dark() else '#ffffff'};
+                    color: {'#ffffff' if is_dark() else '#292929'};
+                    padding: 8px 10px; border-radius: 12px;
+                    border: 1.5px solid {'#777777' if is_dark() else '#888888'};
+                    outline: none;
+                }}
+            """)
 
     def _update_relative_size(self):
         screen = QGuiApplication.screenAt(self.pos()) or QGuiApplication.primaryScreen()
@@ -1151,6 +1318,9 @@ outline: none;
         mode = theme
         explorer_btn = f'<button id="explorerBtn" class="toolbar-btn {mode}" style="margin-left:1.5rem; display:{"inline-block" if self.show_explorer_btn else "none"};">← Explorer</button>'
 
+        # Wenn Glas-Modus aktiv, verstecken wir den Switch, um Light-Mode Unfälle zu vermeiden
+        switch_display = "none" if use_glass_mode else "block"
+
         html_code = f"""
         <!DOCTYPE html>
         <html lang="de">
@@ -1158,120 +1328,45 @@ outline: none;
             <meta charset="UTF-8" />
             <title>Toolbar</title>
             <style>
-                html, body {{
-                    height: 100%;
-margin: 0;
-                    padding: 0;
-                }}
-
+                html, body {{ height: 100%; margin: 0; padding: 0; }}
                 .toolbar-btn {{
-                    padding: 0.25em 0.675em;
-border: 0.07em solid transparent;
-                    border-radius: 0.38em;
-                    font-size: 1em;
-                    font-weight: 500;
-                    cursor: pointer;
-                    transition: background 0.3s, color 0.3s, border-color 0.3s;
-min-height: 2.25em;
-                    min-width: 5em;
-                    background: transparent !important;
-                    outline: none;
+                    padding: 0.25em 0.675em; border: 0.07em solid transparent; border-radius: 0.38em;
+                    font-size: 1em; font-weight: 500; cursor: pointer; transition: background 0.3s, color 0.3s, border-color 0.3s;
+                    min-height: 2.25em; min-width: 5em; background: transparent !important; outline: none;
                 }}
                 .light {{ background: #ffffff; color: #333; border-color: #dddddd; }}
                 .dark  {{ background: #2c2c2c; color: #f5f5f5; border-color: #444; }}
 
                 .toolbar-container {{
-                    display: flex;
-align-items: center;
-                    height: 2.5rem;
-                    padding: 0 2vw;
-                    gap: 0.5em;
-                    background: transparent !important;
-}}
+                    display: flex; align-items: center; height: 2.5rem; padding: 0 2vw; gap: 0.5em; background: transparent !important;
+                }}
 
-                /* --- Toggle Switch --- */
+                /* Toggle Switch Container */
                 .switch {{
-                  position: relative;
-width: 5rem;
-                  height: 2.5rem;
-                  cursor: pointer;
-                  user-select: none;
-                  margin-top: 0.4rem;
-}}
-
-                .switch input {{
-                  position: absolute;
-top: 0;
-                  left: 0;
-                  width: 100%;
-                  height: 100%;
-                  margin: 0;
-                  opacity: 0;
-                  cursor: pointer;
-                  z-index: 3;
-}}
-
+                  display: {switch_display}; 
+                  position: relative; width: 5rem; height: 2.5rem; cursor: pointer; user-select: none; margin-top: 0.4rem;
+                }}
+                .switch input {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; z-index: 3; }}
                 .background {{
-                  position: absolute;
-width: 5rem;
-                  height: 2rem;
-                  border-radius: 1.25rem;
-                  border: 0.15rem solid #202020;
-                  background: linear-gradient(to right, #484848 0%, #202020 100%);
-                  transition: all 0.3s;
-top: 0;
-                  left: 0;
-                  z-index: 1;
+                  position: absolute; width: 5rem; height: 2rem; border-radius: 1.25rem;
+                  border: 0.15rem solid #202020; background: linear-gradient(to right, #484848 0%, #202020 100%);
+                  transition: all 0.3s; top: 0; left: 0; z-index: 1;
                 }}
-
-                .stars1,
-                .stars2 {{
-                  position: absolute;
-height: 0.2rem;
-                  width: 0.2rem;
-                  background: #FFFFFF;
-                  border-radius: 50%;
-                  transition: 0.3s all ease;
-}}
-                .stars1 {{ top: 0.2em; right: 0.8em; }}
-                .stars2 {{ top: 1.3em; right: 1.75em; }}
-
+                .stars1, .stars2 {{ position: absolute; height: 0.2rem; width: 0.2rem; background: #FFFFFF; border-radius: 50%; transition: 0.3s all ease; }}
+                .stars1 {{ top: 0.2em; right: 0.8em; }} .stars2 {{ top: 1.3em; right: 1.75em; }}
                 .sun-moon {{
-                  position: absolute;
-left: 0;
-                  top: 0;
-                  height: 1.5rem;
-                  width: 1.5rem;
-                  margin: 0.25rem;
-                  background: #FFFDF2;
-                  border-radius: 50%;
-                  border: 0.15rem solid #DEE2C6;
-transition: all 0.5s ease;
-                  z-index: 2;
+                  position: absolute; left: 0; top: 0; height: 1.5rem; width: 1.5rem; margin: 0.25rem;
+                  background: #FFFDF2; border-radius: 50%; border: 0.15rem solid #DEE2C6; transition: all 0.5s ease; z-index: 2;
                 }}
-
                 .sun-moon .dots {{
-                  position: absolute;
-top: 0.1em;
-                  left: 0.7em;
-                  height: 0.5rem;
-                  width: 0.5rem;
-                  background: #EFEEDB;
-                  border: 0.15rem solid #DEE2C6;
-                  border-radius: 50%;
-                  transition: 0.4s all ease;
-}}
-
-                .switch input:checked ~ .sun-moon {{
-                  left: calc(100% - 2rem);
-background: #F5EC59;
-                  border-color: #E7C65C;
-                  transform: rotate(-25deg);
+                  position: absolute; top: 0.1em; left: 0.7em; height: 0.5rem; width: 0.5rem; background: #EFEEDB;
+                  border: 0.15rem solid #DEE2C6; border-radius: 50%; transition: 0.4s all ease;
                 }}
-
+                .switch input:checked ~ .sun-moon {{
+                  left: calc(100% - 2rem); background: #F5EC59; border-color: #E7C65C; transform: rotate(-25deg);
+                }}
                 .switch input:checked ~ .background {{
-                  border: 0.15rem solid #78C1D5;
-background: linear-gradient(to right, #78C1D5 0%, #BBE7F5 100%);
+                  border: 0.15rem solid #78C1D5; background: linear-gradient(to right, #78C1D5 0%, #BBE7F5 100%);
                 }}
             </style>
         </head>
@@ -1293,25 +1388,23 @@ background: linear-gradient(to right, #78C1D5 0%, #BBE7F5 100%);
                     const toggle = document.getElementById("toggle");
                     const explorerBtn = document.getElementById("explorerBtn");
 
-                    toggle.addEventListener("change", function() {{
-                        bridge.toggleTheme();
-if (explorerBtn) {{
-                            if (toggle.checked) {{
-                                explorerBtn.classList.remove('dark');
-explorerBtn.classList.add('light');
-                            }} else {{
-                                explorerBtn.classList.remove('light');
-explorerBtn.classList.add('dark');
+                    if (toggle) {{
+                        toggle.addEventListener("change", function() {{
+                            bridge.toggleTheme();
+                            if (explorerBtn) {{
+                                if (toggle.checked) {{
+                                    explorerBtn.classList.remove('dark'); explorerBtn.classList.add('light');
+                                }} else {{
+                                    explorerBtn.classList.remove('light'); explorerBtn.classList.add('dark');
+                                }}
                             }}
-                        }}
-                    }});
-if (explorerBtn) {{
-                        explorerBtn.onclick = function() {{
-                            bridge.goBackToExplorer();
-}};
+                        }});
+                    }}
+                    if (explorerBtn) {{
+                        explorerBtn.onclick = function() {{ bridge.goBackToExplorer(); }};
                     }}
                 }});
-</script>
+            </script>
         </body>
         </html>
         """
@@ -1330,21 +1423,14 @@ if (explorerBtn) {{
 
     def toggle_theme(self):
         global theme
+        if use_glass_mode:
+            # Kein Toggle im Glass Mode
+            return
         theme = "light" if is_dark() else "dark"
         set_theme(theme, self.app)
-        self.update_button_styles(self.layout)
-        self._update_scrollbar_theme()
-        self._update_searchbar_theme()
-        self._update_tab_style()  # Styles for Tabs update
-        if self.popup and self.popup.isVisible():
-            self.popup.update_button_styles(self.popup.layout)
-            self.popup._update_scrollbar_theme()
-        if WEBENGINE_AVAILABLE:
-            safe_run_js(self.html_toolbar, f'window.setThemeUI && window.setThemeUI("{theme}");')
+        self.refresh_all_styles()
 
     def go_back_to_explorer(self):
-        # Wir schließen die Tabs NICHT. Wir wechseln nur die Ansicht.
-        # Damit laufen Plugins im Hintergrund weiter.
         self.pages.setCurrentWidget(self.scroll_area)
         self.show_explorer_btn = False
         self._build_html_toolbar()
@@ -1354,8 +1440,6 @@ if (explorerBtn) {{
     def load_plugin_from_path(self, path: str, source_widget=None):
         try:
             plugin_mode = "Popup" if isinstance(source_widget, PopupWindow) else "Window"
-
-            # --- POPUP LOGIC (Old logic, no tabs) ---
             if plugin_mode == "Popup":
                 if path.lower().endswith('.py'):
                     widget = self.load_python_plugin_widget(path, mode=plugin_mode)
@@ -1365,16 +1449,12 @@ if (explorerBtn) {{
                 else:
                     subprocess.Popen([sys.executable, path]);
                     return
-
                 source_widget.show_plugin_widget(widget, os.path.basename(path))
                 return
 
-            # --- MAIN WINDOW LOGIC (With Tabs) ---
-            # 1. Check if plugin is already running in a tab
             for i in range(self.tab_widget.count()):
                 w = self.tab_widget.widget(i)
                 if w.property("plugin_path") == path:
-                    # Switch to existing tab
                     self.tab_widget.setCurrentIndex(i)
                     self.pages.setCurrentWidget(self.tab_widget)
                     self.show_explorer_btn = True
@@ -1383,7 +1463,6 @@ if (explorerBtn) {{
                         safe_run_js(self.html_toolbar, f'window.setThemeUI && window.setThemeUI("{theme}");')
                     return
 
-            # 2. Load new plugin
             if path.lower().endswith('.py'):
                 widget = self.load_python_plugin_widget(path, mode=plugin_mode)
                 if widget is None: return
@@ -1393,18 +1472,13 @@ if (explorerBtn) {{
                 subprocess.Popen([sys.executable, path]);
                 return
 
-            # 3. Add to tabs
             container = QWidget();
             v = QVBoxLayout(container);
             v.setContentsMargins(12, 12, 12, 12)
-            # Im Tab brauchen wir den Header "Plugin: Name" nicht zwingend, da der Tab-Reiter den Namen hat.
-            # Aber wir lassen das Widget sauber im Container.
             v.addWidget(widget)
-
             container.setProperty("plugin_path", path)
             self.tab_widget.addTab(container, os.path.basename(path))
             self.tab_widget.setCurrentWidget(container)
-
             self.pages.setCurrentWidget(self.tab_widget)
             self.show_explorer_btn = True;
             self._build_html_toolbar()
