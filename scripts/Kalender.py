@@ -1,0 +1,1724 @@
+# scripts/pro_calendar_html.py
+import os
+import json
+import sys
+import uuid  # Hinzugefügt für eindeutige Event-IDs
+from datetime import datetime, date, timedelta, time
+from pathlib import Path
+
+from pytz import timezone
+from dateutil.rrule import rrulestr, rruleset
+from icalendar import Calendar, Event  # Hinzugefügt, um Events zu erstellen
+from icalendar.prop import vDDDTypes
+
+from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QEvent, QDateTime, pyqtSlot, QObject
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QFileDialog, QListWidget, QListWidgetItem, QLabel, QAbstractItemView,
+    QSizePolicy, QFrame, QFormLayout, QLineEdit,
+    QInputDialog, QMessageBox  # Bereinigt: QDateTimeEdit, QComboBox, QGraphicsDropShadowEffect entfernt
+)
+# QColor und QPainter entfernt, da sie nur für den Overlay/Schatten-Effekt waren
+from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtWebChannel import QWebChannel
+from PyQt5.QtGui import QPalette
+
+
+# ===========================
+# (Das BlurOverlay wurde komplett entfernt)
+# ===========================
+
+# ===========================
+# Calendar API für JavaScript (Löschen von Terminen)
+# ===========================
+class CalendarAPI(QObject):
+    """API für JavaScript, um Termine zu löschen."""
+    def __init__(self, parent_plugin):
+        super().__init__(parent_plugin)
+        self.plugin = parent_plugin
+
+    @pyqtSlot(str, str, str, result=bool)
+    def delete_event(self, event_uid: str, calendar_path: str, event_start: str = "") -> bool:
+        """Löscht einen Termin anhand seiner UID aus der angegebenen ICS-Datei.
+        
+        Args:
+            event_uid: Die UID des Events
+            calendar_path: Der Pfad zur ICS-Datei
+            event_start: Das Startdatum des zu löschenden Termins (ISO-Format) für wiederkehrende Events
+        """
+        try:
+            return self.plugin._delete_event_by_uid(event_uid, calendar_path, event_start)
+        except Exception as e:
+            print(f"Fehler beim Löschen des Termins: {e}")
+            return False
+
+# ===========================
+# Theme-Watcher (wie in Notizen.py)
+# ===========================
+def _detect_host_theme(default="dark"):
+    """Ermittelt das aktuelle Theme der Hauptanwendung."""
+    app = QApplication.instance()
+    if app is not None:
+        prop = app.property("toolbar_theme")
+        if isinstance(prop, str) and prop.lower() in ("light", "dark"):
+            return prop.lower()
+        try:
+            palette = app.palette()
+            if palette and palette.color(QPalette.Window).value() < 128:
+                return "dark"
+        except Exception:
+            pass
+    return default
+
+class HostThemeWatcher(QObject):
+    themeChanged = pyqtSignal(str)
+
+    def __init__(self, app_instance):
+        super().__init__(app_instance)
+        self._app = app_instance
+        if self._app is not None:
+            self._app.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if watched is self._app and event.type() == QEvent.DynamicPropertyChange:
+            try:
+                prop_name = event.propertyName().data().decode('utf-8')
+            except Exception:
+                prop_name = None
+            if prop_name == "toolbar_theme":
+                value = self._app.property("toolbar_theme")
+                if isinstance(value, str):
+                    self.themeChanged.emit(value.lower())
+        return super().eventFilter(watched, event)
+
+    def cleanup(self):
+        if self._app is not None:
+            try:
+                self._app.removeEventFilter(self)
+            except Exception:
+                pass
+            self._app = None
+
+# ===========================
+# Haupt-Widget
+# ===========================
+class PluginWidget(QMainWindow):
+    def __init__(self, theme="dark", mode="Window"):
+        super().__init__()
+        self.setWindowTitle("📅 Kalender")
+        self.resize(1100, 740)
+        self.mode = mode  # "Window" or "Popup"
+        self.ics_files = load_config()
+        self._current_theme = _detect_host_theme(default=theme if theme in ("light", "dark") else "dark")
+        self._theme_watcher = None
+
+        # --- Layout Grundgerüst ---
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # Toolbar + lists only for Window mode
+        if self.mode == "Window":
+            self.toolbar_widget = QWidget()
+            bar_l = QHBoxLayout(self.toolbar_widget)
+            bar_l.setContentsMargins(12, 10, 12, 10)
+            bar_l.setSpacing(10)
+
+            # --- NEUE BUTTONS (HINZUGEFÜGT) ---
+            self.btn_new_event = QPushButton("Neuer Termin")
+            self.btn_new_event.setStyleSheet("background:#8ab4f8; color:#1c1f24; font-weight:700;")  # Hervorgehoben
+            self.btn_new_cal = QPushButton("Neuer Kalender")
+            # ---------------------------------
+
+            self.btn_add = QPushButton("ICS hinzufügen")
+            self.btn_remove = QPushButton("Entfernen")
+            self.btn_week = QPushButton("Woche")
+            self.btn_2weeks = QPushButton("2 Wochen")
+            self.btn_month = QPushButton("Monat")
+            self.btn_day = QPushButton("Heute (kompakt)")
+            self.title_label = QLabel(" ")
+            self.title_label.setStyleSheet("color:#aaa;")
+
+            # --- Buttons zur Toolbar HINZUGEFÜGT ---
+            bar_l.addWidget(self.btn_new_event)
+            bar_l.addWidget(self.btn_new_cal)
+
+            bar_l.addSpacing(15)
+            # ----------------------------------------
+            bar_l.addWidget(self.btn_add)
+            bar_l.addWidget(self.btn_remove)
+            bar_l.addStretch(1)
+            bar_l.addWidget(self.btn_day)
+            bar_l.addWidget(self.btn_week)
+            bar_l.addWidget(self.btn_2weeks)
+            bar_l.addWidget(self.btn_month)
+            bar_l.addStretch(1)
+            bar_l.addWidget(self.title_label)
+
+            # two calendar lists: one general, one for compact day view selection
+            self.list_widget = DropListWidget()
+            self.list_widget.setMaximumHeight(140)
+            self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+
+            self.list_widget_day = DropListWidget()
+            self.list_widget_day.setMaximumHeight(140)
+            self.list_widget_day.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+            self.list_widget_day.setVisible(False)
+
+            self._update_toolbar_style()
+
+            root.addWidget(self.toolbar_widget)
+            root.addWidget(self.list_widget)
+            root.addWidget(self.list_widget_day)
+
+            # connect events
+            # --- NEUE SIGNALE (HINZUGEFÜGT) ---
+            self.btn_new_event.clicked.connect(self.show_new_appointment_form)
+            self.btn_new_cal.clicked.connect(self.create_new_calendar)
+            # ---------------------------------
+            self.btn_add.clicked.connect(self.add_ics_dialog)
+            self.btn_remove.clicked.connect(self.remove_selected)
+            self.btn_week.clicked.connect(lambda: self.render(mode="week"))
+            self.btn_2weeks.clicked.connect(lambda: self.render(mode="two_weeks"))
+            self.btn_month.clicked.connect(lambda: self.render(mode="month"))
+            self.btn_day.clicked.connect(lambda: self.render(mode="day"))
+
+            self.list_widget.itemChanged.connect(lambda _: self.render())
+            self.list_widget_day.itemChanged.connect(lambda _: self.render("day"))
+
+            self.list_widget.filesDropped.connect(self.add_ics_paths)
+            self.list_widget_day.filesDropped.connect(self.add_ics_paths)
+
+        # WebView (always)
+        self.web = QWebEngineView()
+        self.web.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        root.addWidget(self.web, 1)
+
+        # WebChannel für JavaScript-Kommunikation (Löschen von Terminen)
+        self.channel = QWebChannel(self.web.page())
+        self.calendar_api = CalendarAPI(self)
+        self.channel.registerObject("calendarAPI", self.calendar_api)
+        self.web.page().setWebChannel(self.channel)
+
+        # --- Overlay-Initialisierung entfernt ---
+
+        # Theme-Watcher einrichten
+        app_instance = QApplication.instance()
+        if app_instance is not None:
+            self._theme_watcher = HostThemeWatcher(app_instance)
+            self._theme_watcher.themeChanged.connect(self._on_host_theme_changed)
+            self.destroyed.connect(self._cleanup_theme_watcher)
+
+        # Initial
+        if self.mode == "Window":
+            self._refresh_calendar_list()
+            self._refresh_calendar_list_day()
+            self.render(mode="week")
+        else:
+            # popup -> directly day compact
+            self.render(mode="day")
+
+    def _on_host_theme_changed(self, theme: str):
+        """Wird aufgerufen, wenn sich das Theme im Launcher ändert."""
+        if theme in ("light", "dark") and theme != self._current_theme:
+            self._current_theme = theme
+            if self.mode == "Window":
+                self._update_toolbar_style()
+            self.render()  # Neu rendern mit neuem Theme
+
+    def _update_toolbar_style(self):
+        """Aktualisiert die Toolbar-Styles basierend auf dem aktuellen Theme."""
+        if self.mode != "Window" or not hasattr(self, 'btn_new_event'):
+            return
+        if self._current_theme == "light":
+            bar_style = """
+                QWidget { background:#f5f5f5; }
+                QPushButton {
+                    background:#e0e0e0; color:#1a1a1a; border:none; padding:8px 12px; border-radius:10px;
+                    font-weight: 600;
+                }
+                QPushButton:hover { background:#d0d0d0; }
+                QListWidget { background:#ffffff; color:#1a1a1a; border-top:1px solid #d0d0d0; border-bottom:1px solid #d0d0d0; }
+            """
+            self.btn_new_event.setStyleSheet("background:#007aff; color:#ffffff; font-weight:700;")
+            if hasattr(self, 'title_label'):
+                self.title_label.setStyleSheet("color:#666666;")
+        else:
+            bar_style = """
+                QWidget { background:#111318; }
+                QPushButton {
+                    background:#263238; color:#e6e6e6; border:none; padding:8px 12px; border-radius:10px;
+                    font-weight: 600;
+                }
+                QPushButton:hover { background:#37474f; }
+                QListWidget { background:#0f1115; color:#ddd; border-top:1px solid #1f2430; border-bottom:1px solid #1f2430; }
+            """
+            self.btn_new_event.setStyleSheet("background:#8ab4f8; color:#1c1f24; font-weight:700;")
+            if hasattr(self, 'title_label'):
+                self.title_label.setStyleSheet("color:#aaa;")
+        
+        # Setze den Style auf die Toolbar
+        if hasattr(self, 'toolbar_widget'):
+            self.toolbar_widget.setStyleSheet(bar_style)
+
+    def _cleanup_theme_watcher(self):
+        if self._theme_watcher:
+            self._theme_watcher.cleanup()
+            self._theme_watcher.deleteLater()
+            self._theme_watcher = None
+
+    def _delete_event_by_uid(self, event_uid: str, calendar_path: str, event_start: str = "") -> bool:
+        """Löscht einen Termin anhand seiner UID aus der angegebenen ICS-Datei.
+        
+        Bei wiederkehrenden Terminen wird nur der einzelne Termin gelöscht (EXDATE hinzufügen),
+        bei nicht-wiederkehrenden Terminen wird das gesamte Event gelöscht.
+        """
+        try:
+            # Pfad normalisieren
+            cal_path = Path(calendar_path)
+            if not cal_path.is_absolute():
+                cal_path = _script_dir() / cal_path
+
+            if not cal_path.exists():
+                self.show_error_message("Fehler", f"Kalenderdatei nicht gefunden: {cal_path}")
+                return False
+
+            # Kalender laden
+            with open(cal_path, "rb") as f:
+                cal = Calendar.from_ical(f.read())
+
+            # Event mit passender UID finden
+            master_event = None
+            for comp in cal.walk():
+                if comp.name == "VEVENT":
+                    uid = str(comp.get("UID") or "")
+                    if uid == event_uid:
+                        # Prüfe ob es ein Master-Event ist (kein RECURRENCE-ID)
+                        if comp.get("RECURRENCE-ID") is None:
+                            master_event = comp
+                            break
+
+            if master_event is None:
+                self.show_error_message("Fehler", "Termin mit dieser UID wurde nicht gefunden.")
+                return False
+
+            # Prüfe ob es ein wiederkehrendes Event ist
+            rrule = master_event.get("RRULE")
+            has_recurrence = rrule is not None
+
+            if has_recurrence and event_start:
+                # Wiederkehrendes Event: Füge EXDATE hinzu, um nur diesen Termin zu löschen
+                try:
+                    # Parse das Startdatum
+                    event_start_dt = datetime.fromisoformat(event_start.replace("Z", ""))
+                    # Normalisiere auf Datum (ohne Zeit) für All-Day Events oder auf DateTime
+                    dtstart_prop = master_event.get("DTSTART")
+                    if dtstart_prop:
+                        dtstart_dt = getattr(dtstart_prop, "dt", dtstart_prop)
+                        is_all_day = isinstance(dtstart_dt, date) and not isinstance(dtstart_dt, datetime)
+                        
+                        if is_all_day:
+                            # Für All-Day Events: Nur das Datum verwenden
+                            exdate_value = event_start_dt.date()
+                        else:
+                            # Für normale Events: DateTime verwenden
+                            exdate_value = event_start_dt
+                    else:
+                        exdate_value = event_start_dt
+
+                    # Prüfe ob bereits EXDATE existiert
+                    existing_exdates = master_event.get("EXDATE", [])
+                    if not isinstance(existing_exdates, list):
+                        existing_exdates = [existing_exdates]
+
+                    # Prüfe ob dieses Datum bereits in EXDATE ist
+                    already_excluded = False
+                    for exdate_prop in existing_exdates:
+                        if hasattr(exdate_prop, "dts"):
+                            for dt in exdate_prop.dts:
+                                dt_val = getattr(dt, "dt", dt)
+                                if isinstance(dt_val, date) and isinstance(exdate_value, date):
+                                    if dt_val == exdate_value:
+                                        already_excluded = True
+                                        break
+                                elif isinstance(dt_val, datetime) and isinstance(exdate_value, datetime):
+                                    # Vergleiche nur Datum und Zeit (ohne Zeitzone)
+                                    if dt_val.replace(tzinfo=None) == exdate_value.replace(tzinfo=None):
+                                        already_excluded = True
+                                        break
+
+                    if not already_excluded:
+                        # Erstelle neues EXDATE
+                        exdate = vDDDTypes(exdate_value)
+                        master_event.add("EXDATE", exdate)
+                    else:
+                        # Bereits ausgeschlossen
+                        return True
+
+                except Exception as e:
+                    print(f"Fehler beim Hinzufügen von EXDATE: {e}")
+                    # Fallback: Event komplett löschen
+                    cal.subcomponents.remove(master_event)
+            else:
+                # Nicht wiederkehrendes Event: Komplett löschen
+                # Auch alle RECURRENCE-ID Overrides mit dieser UID löschen
+                components_to_remove = [master_event]
+                for comp in cal.walk():
+                    if comp.name == "VEVENT":
+                        uid = str(comp.get("UID") or "")
+                        if uid == event_uid:
+                            if comp not in components_to_remove:
+                                components_to_remove.append(comp)
+
+                for comp in components_to_remove:
+                    if comp in cal.subcomponents:
+                        cal.subcomponents.remove(comp)
+
+            # Kalender speichern
+            cal_path.write_bytes(cal.to_ical())
+            # UI aktualisieren
+            self.render()
+            return True
+
+        except Exception as e:
+            self.show_error_message("Fehler beim Löschen", f"Der Termin konnte nicht gelöscht werden:\n{e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def closeEvent(self, event):
+        self._cleanup_theme_watcher()
+        super().closeEvent(event)
+
+    # ===========================
+    # NEUE FUNKTIONEN: Termin / Kalender erstellen
+    # ===========================
+
+    def show_new_appointment_form(self):
+        """
+        Zeigt ein moderneres, größeres Formularfenster zur Erstellung eines neuen Termins.
+        """
+
+        from PyQt5.QtWidgets import (
+            QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
+            QLineEdit, QDateTimeEdit, QPushButton, QMessageBox
+        )
+        from PyQt5.QtCore import Qt
+        from datetime import datetime, timedelta
+
+        # 1. Kalender-Prüfung (wie im Original)
+        writeable_calendars = []
+        for p in self.ics_files:
+            full = Path(p)
+            if not full.is_absolute():
+                full = _script_dir() / p
+            if full.exists() and not str(p).lower().startswith("http"):
+                writeable_calendars.append(p)
+
+        if not writeable_calendars:
+            self.show_error_message(
+                "Kein lokaler Kalender",
+                "Bitte füge zuerst eine lokale .ics-Datei hinzu oder erstelle einen neuen Kalender, um Termine zu speichern."
+            )
+            return
+
+        class AppointmentFormDialog(QDialog):
+            def __init__(self, calendars, parent=None):
+                super().__init__(parent)
+                self.setWindowTitle("Neuen Termin erstellen")
+                self.setMinimumSize(400, 320)
+                self.setSizeGripEnabled(True)
+                self.setWindowFlags(self.windowFlags() | Qt.WindowMinMaxButtonsHint)
+
+                layout = QVBoxLayout(self)
+                layout.setSpacing(20)
+                # Theme wird vom Parent übernommen
+                parent_theme = getattr(parent, '_current_theme', 'dark') if parent else 'dark'
+                if parent_theme == "light":
+                    self.setStyleSheet("""
+                        QDialog { background: #ffffff; border-radius: 12px; }
+                        QLabel, QComboBox, QLineEdit, QDateTimeEdit {
+                            background: #f5f5f5; color: #1a1a1a; font-size: 15px;
+                        }
+                        QPushButton{
+                            background: #e0e0e0; color: #1a1a1a; border-radius: 8px; font-weight: bold; padding: 8px 18px;
+                        }
+                        QPushButton:hover { background: #d0d0d0; }
+                    """)
+                else:
+                    self.setStyleSheet("""
+                        QDialog { background: #2f3640; border-radius: 12px; }
+                        QLabel, QComboBox, QLineEdit, QDateTimeEdit {
+                            background: #3a444f; color: #ffffff; font-size: 15px;
+                        }
+                        QPushButton{
+                            background: #3a444f; color: #ffffff; border-radius: 8px; font-weight: bold; padding: 8px 18px;
+                        }
+                        QPushButton:hover { background: #29333e; }
+                    """)
+
+                # Kalender Auswahl
+                self.cal_combo = QComboBox()
+                cal_names = [Path(p).name for p in calendars]
+                self.cal_combo.addItems(cal_names)
+                layout.addLayout(self._row("Kalender:", self.cal_combo))
+
+                # Titel
+                self.title_edit = QLineEdit("Neuer Termin")
+                layout.addLayout(self._row("Titel:", self.title_edit))
+
+                # Startzeit
+                self.start_edit = QDateTimeEdit(datetime.now())
+                self.start_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+                layout.addLayout(self._row("Startzeit:", self.start_edit))
+
+                # Endzeit
+                self.end_edit = QDateTimeEdit(datetime.now() + timedelta(hours=1))
+                self.end_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+                layout.addLayout(self._row("Endzeit:", self.end_edit))
+
+                # Buttons
+                button_row = QHBoxLayout()
+                self.save_btn = QPushButton("Speichern")
+                self.cancel_btn = QPushButton("Abbrechen")
+                button_row.addWidget(self.save_btn)
+                button_row.addWidget(self.cancel_btn)
+                layout.addLayout(button_row)
+
+                self.save_btn.clicked.connect(self.accept)
+                self.cancel_btn.clicked.connect(self.reject)
+
+            def _row(self, label_text, widget):
+                row = QHBoxLayout()
+                label = QLabel(label_text)
+                label.setFixedWidth(100)
+                row.addWidget(label)
+                row.addWidget(widget)
+                return row
+
+            def get_data(self, calendars):
+                while True:
+                    if self.exec_() != QDialog.Accepted:
+                        return None
+
+                    title = self.title_edit.text().strip()
+                    if not title:
+                        QMessageBox.warning(self, "Titel fehlt", "Bitte gib einen Titel für den Termin ein.")
+                        continue
+
+                    start_dt = self.start_edit.dateTime().toPyDateTime()
+                    end_dt = self.end_edit.dateTime().toPyDateTime()
+                    if end_dt <= start_dt:
+                        QMessageBox.warning(self, "Ungültige Zeit", "Die Endzeit muss nach der Startzeit liegen.")
+                        continue
+
+                    cal_name = self.cal_combo.currentText()
+                    calendar_path = next((p for p in calendars if Path(p).name == cal_name), "")
+                    if not calendar_path:
+                        QMessageBox.warning(self, "Fehler", "Kalenderpfad konnte nicht ermittelt werden.")
+                        return None
+
+                    return {
+                        "title": title,
+                        "start": start_dt,
+                        "end": end_dt,
+                        "calendar_path": calendar_path
+                    }
+
+        dlg = AppointmentFormDialog(writeable_calendars, parent=self)
+        data = dlg.get_data(writeable_calendars)
+        if data:
+            self.save_new_appointment(data)
+
+    @pyqtSlot(dict)  # Stellt sicher, dass das Diktat korrekt empfangen wird
+    def save_new_appointment(self, data):
+        """ Speichert den neuen Termin in der ausgewählten ICS-Datei (Unverändert) """
+        try:
+            cal_path = Path(data["calendar_path"])  # Holt den originalen Pfad (relativ oder absolut)
+
+            # Wende die *originale* Pfad-Logik an
+            if not cal_path.is_absolute():
+                cal_path = _script_dir() / cal_path
+
+            if not cal_path.exists():
+                self.show_error_message("Fehler", f"Kalenderdatei nicht gefunden: {cal_path}")
+                return
+
+            # Kalender laden
+            try:
+                cal_content = cal_path.read_bytes()
+                cal = Calendar.from_ical(cal_content)
+            except Exception as e:
+                # Fallback: Wenn die Datei leer oder korrupt ist, neuen Kalender erstellen
+                print(f"Konnte Kalender nicht laden ({e}), erstelle neuen.")
+                cal = Calendar()
+                cal.add('prodid', '-//Pro Calendar Plugin//')
+                cal.add('version', '2.0')
+
+            # Neues Event erstellen
+            event = Event()
+            event.add('summary', data["title"])
+            event.add('dtstart', data["start"])
+            event.add('dtend', data["end"])
+            event.add('dtstamp', datetime.now())  # `datetime.now()` ist naiv
+            event.add('uid', str(uuid.uuid4()))
+
+            # Event hinzufügen und speichern
+            cal.add_component(event)
+            cal_path.write_bytes(cal.to_ical())
+
+            # UI aktualisieren
+            self.render()  # Neu rendern, um den Termin anzuzeigen
+
+        except Exception as e:
+            self.show_error_message("Fehler beim Speichern", f"Der Termin konnte nicht gespeichert werden:\n{e}")
+
+    def create_new_calendar(self):
+        """ Fragt nach einem Namen und erstellt eine neue, leere ICS-Datei (Unverändert) """
+        text, ok = QInputDialog.getText(
+            self,
+            "Neuer Kalender",
+            "Wie soll der neue Kalender heißen?\n(z.B. 'Privat' oder 'Arbeit')",
+            QLineEdit.Normal,
+            "MeinKalender"
+        )
+
+        if ok and text:
+            # Sicherstellen, dass der Name mit .ics endet
+            if not text.lower().endswith(".ics"):
+                filename = text + ".ics"
+            else:
+                filename = text
+
+            # Pfad im Skript-Verzeichnis (wie im Original-Plugin)
+            new_path_str = str(_script_dir() / filename)
+
+            if Path(new_path_str).exists():
+                self.show_error_message("Fehler", "Ein Kalender mit diesem Namen existiert bereits.")
+                return
+
+            try:
+                # Neuen, leeren Kalender erstellen und speichern
+                cal = Calendar()
+                cal.add('prodid', '-//Pro Calendar Plugin//')
+                cal.add('version', '2.0')
+                Path(new_path_str).write_bytes(cal.to_ical())
+
+                # Zur Konfiguration hinzufügen und UI aktualisieren
+                self.ics_files.append(new_path_str)
+                save_config(self.ics_files)
+                self._refresh_calendar_list()
+                self._refresh_calendar_list_day()
+                self.render()
+
+            except Exception as e:
+                self.show_error_message("Fehler", f"Kalender konnte nicht erstellt werden:\n{e}")
+
+    def show_error_message(self, title, message):
+        """
+        Zeigt eine einfache Fehlermeldung an
+        """
+        msg = QMessageBox(self)
+        msg.setWindowTitle(title)
+        msg.setText(message)
+        msg.setIcon(QMessageBox.Warning)
+        if self._current_theme == "light":
+            msg.setStyleSheet("""
+                QMessageBox { background: #ffffff; color: #1a1a1a; }
+                QLabel { color: #1a1a1a; }
+                QPushButton { 
+                    background:#e0e0e0; color:#1a1a1a; border:none; 
+                    padding:8px 14px; border-radius:10px;
+                }
+                QPushButton:hover { background:#d0d0d0; }
+            """)
+        else:
+            msg.setStyleSheet("""
+                QMessageBox { background: #2a2f35; color: #e8e8e8; }
+                QLabel { color: #e8e8e8; }
+                QPushButton { 
+                    background:#3a444f; color:#e8e8e8; border:none; 
+                    padding:8px 14px; border-radius:10px;
+                }
+                QPushButton:hover { background:#4a545f; }
+            """)
+        msg.exec_()
+
+    def resizeEvent(self, event):
+        """ resizeEvent bereinigt (Overlay-Logik entfernt) """
+        super().resizeEvent(event)
+
+    # ---- Kalenderlisten ----
+    def _refresh_calendar_list_day(self):
+        if self.mode != "Window":
+            return
+        self.list_widget_day.clear()
+        for path in self.ics_files:
+            full = Path(path)
+            if not full.is_absolute():
+                full = _script_dir() / full
+            if not full.exists():
+                continue
+            item = QListWidgetItem(full.name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            item.setCheckState(Qt.Checked)
+            item.setData(Qt.UserRole, str(full))
+
+            self.list_widget_day.addItem(item)
+
+    def _refresh_calendar_list(self):
+        if self.mode != "Window":
+            return
+        self.list_widget.clear()
+        for path in self.ics_files:
+            full = Path(path)
+            if not full.is_absolute():
+                full = _script_dir() / full
+            if not full.exists():
+                continue
+            item = QListWidgetItem(full.name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            item.setCheckState(Qt.Checked)
+            item.setData(Qt.UserRole, str(full))
+            self.list_widget.addItem(item)
+
+    def add_ics_paths(self, paths):
+        changed = False
+        current = set(self.ics_files)
+        for p in paths:
+            if p and p not in current and os.path.isfile(p):
+                self.ics_files.append(p)
+                changed = True
+        if changed:
+            save_config(self.ics_files)
+            if self.mode == "Window":
+                self._refresh_calendar_list()
+                self._refresh_calendar_list_day()
+            self.render()
+
+    def add_ics_dialog(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "ICS-Dateien auswählen", "", "Kalender (*.ics)")
+        if paths:
+            self.add_ics_paths(paths)
+
+    def remove_selected(self):
+        if self.mode != "Window":
+            return
+        active_list = self.list_widget if self.list_widget.isVisible() else self.list_widget_day
+        selected = active_list.selectedItems()
+        if not selected:
+            return
+        to_remove = {it.data(Qt.UserRole) for it in selected}
+        self.ics_files = [p for p in self.ics_files if p not in to_remove]
+        save_config(self.ics_files)
+        self._refresh_calendar_list()
+        self._refresh_calendar_list_day()
+        self.render()
+
+    def _active_calendars(self):
+        if self.mode != "Window":
+            return self.ics_files
+        act = []
+        for i in range(self.list_widget.count()):
+            it = self.list_widget.item(i)
+            if it.checkState() == Qt.Checked:
+                act.append(it.data(Qt.UserRole))
+        return act
+
+    def _active_calendars_day(self):
+        if self.mode != "Window":
+            return self.ics_files
+        act = []
+        for i in range(self.list_widget_day.count()):
+            it = self.list_widget_day.item(i)
+            if it.checkState() == Qt.Checked:
+                act.append(it.data(Qt.UserRole))
+        return act
+
+    def load_events(self, active_paths=None):
+        # (Original unveränderte Funktion, wie in der Vorlage)
+        evs = []
+        now = datetime.now()
+        window_start = now - timedelta(days=730)
+        window_end = now + timedelta(days=730)
+
+        calendars = active_paths if active_paths is not None else self._active_calendars()
+
+        for i, path in enumerate(calendars):
+            color = PALETTE[i % len(PALETTE)]
+            try:
+                with open(path, "rb") as f:
+                    cal = Calendar.from_ical(f.read())
+
+                masters = []
+                overrides = {}
+
+                for comp in cal.walk():
+                    if comp.name != "VEVENT":
+                        continue
+
+                    uid = str(comp.get("UID") or "")
+                    rec_id = comp.get("RECURRENCE-ID")
+
+                    if rec_id:
+                        rid_dt = ensure_datetime(getattr(rec_id, "dt", rec_id))
+                        overrides[(uid, rid_dt)] = comp
+                    else:
+                        masters.append(comp)
+
+                for comp in masters:
+                    uid = str(comp.get("UID") or "")
+                    dtstart_prop = comp.get("DTSTART")
+                    if not dtstart_prop:
+                        continue
+
+                    start_base = ensure_datetime(getattr(dtstart_prop, "dt", dtstart_prop))
+
+                    end_prop = comp.get("DTEND")
+                    if end_prop is not None:
+                        end_base = ensure_datetime(getattr(end_prop, "dt", end_prop))
+                    else:
+                        dur_prop = comp.get("DURATION")
+                        if dur_prop:
+                            try:
+                                delta = getattr(dur_prop, "dt", dur_prop)
+                                end_base = start_base + delta
+                            except Exception:
+                                end_base = start_base + timedelta(hours=1)
+                        else:
+                            end_base = start_base + timedelta(hours=1)
+
+                    duration = max(end_base - start_base, timedelta(minutes=1))
+
+                    summary_base = str(comp.get("SUMMARY") or "Termin")
+                    all_day_base = isinstance(getattr(dtstart_prop, "dt", dtstart_prop), date) and not isinstance(
+                        getattr(dtstart_prop, "dt", dtstart_prop), datetime)
+
+                    rrule_prop = comp.get("RRULE")
+                    rdate_props = comp.get("RDATE")
+                    exdate_props = comp.get("EXDATE")
+
+                    has_recur = bool(rrule_prop or rdate_props or exdate_props)
+
+                    if has_recur:
+                        rset = rruleset()
+
+                        if rrule_prop:
+                            try:
+                                rule_bytes = rrule_prop.to_ical() if hasattr(rrule_prop, "to_ical") else None
+                                rule_str = (rule_bytes.decode()
+                                            if isinstance(rule_bytes, (bytes, bytearray))
+                                            else (str(rule_bytes) if rule_bytes is not None else str(rrule_prop)))
+                                r = rrulestr(rule_str, dtstart=start_base)
+                                rset.rrule(r)
+                            except Exception:
+                                pass
+
+                        if rdate_props:
+                            rdate_list = rdate_props if isinstance(rdate_props, list) else [rdate_props]
+
+                            for rdp in rdate_list:
+                                dts = getattr(rdp, "dts", None)
+                                if dts:
+                                    for d in dts:
+                                        try:
+                                            rset.rdate(ensure_datetime(getattr(d, "dt", d)))
+                                        except Exception:
+                                            pass
+
+                        if exdate_props:
+                            exdate_list = exdate_props if isinstance(exdate_props, list) else [exdate_props]
+
+                            for edp in exdate_list:
+                                dts = getattr(edp, "dts", None)
+                                if dts:
+                                    for d in dts:
+                                        try:
+                                            rset.exdate(ensure_datetime(getattr(d, "dt", d)))
+                                        except Exception:
+                                            pass
+
+                        try:
+                            occurrences = rset.between(window_start, window_end, inc=True)
+                        except Exception:
+                            occurrences = []
+
+                        for occ_start in occurrences:
+                            ov = overrides.get((uid, occ_start))
+                            if ov:
+                                o_dtstart_prop = ov.get("DTSTART")
+                                o_dtend_prop = ov.get("DTEND")
+                                o_start = ensure_datetime(getattr(o_dtstart_prop, "dt", o_dtstart_prop)) if o_dtstart_prop else occ_start
+                                if o_dtend_prop:
+                                    o_end = ensure_datetime(getattr(o_dtend_prop, "dt", o_dtend_prop))
+                                else:
+                                    o_end = o_start + duration
+
+                                o_summary = str(ov.get("SUMMARY") or summary_base)
+                                o_all_day = (isinstance(getattr(o_dtstart_prop, "dt", o_dtstart_prop), date) and
+                                             not isinstance(getattr(o_dtstart_prop, "dt", o_dtstart_prop), datetime)) if o_dtstart_prop else all_day_base
+                                if o_end <= o_start:
+                                    o_end = o_start + timedelta(minutes=60)
+
+                                evs.append({
+                                    "title": o_summary,
+                                    "start": o_start.isoformat(),
+                                    "end": o_end.isoformat(),
+                                    "allDay": bool(o_all_day),
+                                    "calendar": os.path.basename(path),
+                                    "color": color,
+                                    "path": path,
+                                    "uid": uid
+                                })
+                            else:
+                                occ_end = occ_start + duration
+                                if occ_end <= occ_start:
+                                    occ_end = occ_start + timedelta(minutes=60)
+                                evs.append({
+                                    "title": summary_base,
+                                    "start": occ_start.isoformat(),
+                                    "end": occ_end.isoformat(),
+                                    "allDay": bool(all_day_base),
+                                    "calendar": os.path.basename(path),
+                                    "color": color,
+                                    "path": path,
+                                    "uid": uid
+                                })
+                    else:
+                        if end_base <= start_base:
+                            end_base = start_base + timedelta(minutes=60)
+                        evs.append({
+                            "title": summary_base,
+                            "start": start_base.isoformat(),
+                            "end": end_base.isoformat(),
+                            "allDay": bool(all_day_base),
+                            "calendar": os.path.basename(path),
+                            "color": color,
+                            "path": path,
+                            "uid": uid
+                        })
+
+            except Exception:
+                continue
+
+        evs.sort(key=lambda e: (e["start"], e["end"]))
+        return evs
+
+    def render(self, mode: str = None):
+        if mode is None:
+            mode = getattr(self, "_last_mode", "week")
+        self._last_mode = mode
+
+        if mode == "day":
+            if self.mode == "Window":
+                self.list_widget.setVisible(False)
+                self.list_widget_day.setVisible(True)
+            all_events = self.load_events(active_paths=self._active_calendars_day())
+            today_date = date.today()
+            todays = []
+            for ev in all_events:
+                s = datetime.fromisoformat(ev["start"])
+                e = datetime.fromisoformat(ev["end"])
+                if s.date() <= today_date <= e.date():
+                    todays.append(ev)
+
+            def _key(ev):
+                s = datetime.fromisoformat(ev["start"])
+                return (0 if ev.get("allDay") else 1, s.time())
+
+            todays.sort(key=_key)
+
+            html = self._build_day_compact_html(todays, today_date)
+            self.web.setHtml(html, baseUrl=QUrl.fromLocalFile(str(_script_dir())))
+            return
+
+        if self.mode == "Window":
+            self.list_widget.setVisible(True)
+            self.list_widget_day.setVisible(False)
+
+            events = self.load_events()
+            if mode == "week":
+                mo, su = current_week_range()
+                self.title_label.setText(f"Aktuelle Woche · {mo.strftime('%d.%m.%Y')} – {su.strftime('%d.%m.%Y')}")
+            elif mode == "two_weeks":
+                mo, su = current_week_range()
+                nmo, nsu = next_week_range()
+                self.title_label.setText(
+                    f"Woche + nächste · {mo.strftime('%d.%m')}–{su.strftime('%d.%m')} & {nmo.strftime('%d.%m')}–{nsu.strftime('%d.%m')}"
+                )
+            else:
+                today = date.today()
+                self.title_label.setText(today.strftime("Monat · %B %Y"))
+
+            html = self._build_html(events, mode)
+            self.web.setHtml(html, baseUrl=QUrl.fromLocalFile(str(_script_dir())))
+
+    def _build_html(self, events, mode):
+        events_json = json.dumps(events, ensure_ascii=False)
+        today_iso = date.today().isoformat()
+
+        html = WINDOW_HTML_TEMPLATE
+        html = html.replace("__EVENTS__", events_json)
+        html = html.replace("__MODE__", mode)
+        html = html.replace("__TODAY__", today_iso)
+        html = html.replace("__THEME__", self._current_theme)
+        return html
+
+    def _build_day_compact_html(self, events, today_date: date):
+        js_events = []
+        for ev in events:
+            start_dt = datetime.fromisoformat(ev["start"])
+            end_dt = datetime.fromisoformat(ev["end"])
+            if end_dt <= start_dt:
+                end_dt = start_dt + timedelta(hours=1)
+
+            js_events.append({
+                "startH": start_dt.hour,
+                "startM": start_dt.minute,
+                "endH": end_dt.hour,
+                "endM": end_dt.minute,
+                "title": ev["title"],
+                "color": ev.get("color", "#3a82f6"),
+                "allDay": ev.get("allDay", False),
+                "uid": ev.get("uid", ""),
+                "path": ev.get("path", ""),
+            })
+
+        events_json = json.dumps(js_events, ensure_ascii=False)
+
+        html = DAY_HTML_TEMPLATE
+        html = html.replace("__EVENTS__", events_json)
+        html = html.replace("__THEME__", self._current_theme)
+        # WebChannel auch für Day-View einrichten
+        if hasattr(self, 'channel'):
+            # Channel ist bereits eingerichtet
+            pass
+        return html
+
+# ===========================
+# Konfiguration / Farben
+# ===========================
+CONFIG_FILE = "calendar_config.json"
+PALETTE = [
+    "#8ab4f8", "#f28b82", "#fbbc04", "#34a853", "#a78bfa",
+    "#80cbc4",
+    "#ff79c6", "#c792ea", "#ffd54f", "#81c784", "#64b5f6"
+]
+LOCAL_TZ = timezone("Europe/Berlin")  # Lokale TZ für Normalisierung
+
+
+# ===========================
+# Pfade / Config (Dein Original-Code)
+# ===========================
+def _script_dir() -> Path:
+    try:
+        return Path(__file__).resolve().parent
+    except Exception:
+        return Path.cwd()
+
+
+def config_path() -> Path:
+    return _script_dir() / CONFIG_FILE
+
+
+def load_config() -> list:
+    p = config_path()
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+
+            norm_paths = []
+            for path in data:
+                full_path = Path(path)
+                if not full_path.is_absolute():
+                    full_path = _script_dir() / full_path
+
+                norm_paths.append(str(full_path))
+            return norm_paths
+        except Exception:
+            return []
+    return []
+
+
+def save_config(paths: list):
+    p = config_path()
+    p.write_text(json.dumps(paths, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ===========================
+# Datums-/Zeit-Helfer (Dein Original-Code)
+# ===========================
+def ensure_datetime(x):
+    """
+    Normalize ICS date/datetime values to naive local datetimes (no tzinfo).
+    - date -> combine with 00:00 local
+    - aware datetime -> convert to LOCAL_TZ and drop tzinfo
+    - naive datetime -> keep as is
+    """
+    if isinstance(x, date) and not isinstance(x, datetime):
+        return datetime.combine(x, time.min)
+    if isinstance(x, datetime):
+        if x.tzinfo is None:
+            return x
+        dt_local = x.astimezone(LOCAL_TZ)
+
+        return dt_local.replace(tzinfo=None)
+    return x
+
+
+def current_week_range(today: date = None):
+    if today is None:
+        today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    sunday = monday + timedelta(days=6)
+    return monday, sunday
+
+
+def next_week_range(today: date = None):
+    mo, _ = current_week_range(today)
+    n_mo = mo + timedelta(days=7)
+    n_su = n_mo + timedelta(days=6)
+    return n_mo, n_su
+
+
+# ===========================
+# Drag&Drop-Liste
+# ===========================
+class DropListWidget(QListWidget):
+    filesDropped = pyqtSignal(list)  # list[str]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.setDragEnabled(False)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DropOnly)
+        self.setSelectionMode(QListWidget.ExtendedSelection)
+        self.viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, e):
+        if obj is self.viewport():
+            if e.type() in (QEvent.DragEnter, QEvent.DragMove):
+                if self._has_ics(e.mimeData()):
+                    e.acceptProposedAction()
+                else:
+                    e.ignore()
+                return True
+
+            elif e.type() == QEvent.Drop:
+                paths = self._extract_paths(e.mimeData())
+                if paths:
+                    e.acceptProposedAction()
+                    self.filesDropped.emit(paths)
+                else:
+
+                    e.ignore()
+                return True
+        return super().eventFilter(obj, e)
+
+    def _has_ics(self, mime):
+        if mime.hasUrls():
+            for u in mime.urls():
+                p = u.toLocalFile()
+
+                if p and p.lower().endswith(".ics"):
+                    return True
+        if mime.hasText():
+            for line in mime.text().splitlines():
+                s = line.strip()
+                if s.startswith("file://"):
+
+                    try:
+                        p = QUrl(s).toLocalFile()
+                        if p and p.lower().endswith(".ics"):
+                            return True
+
+                    except Exception:
+                        pass
+        return False
+
+    def _extract_paths(self, mime):
+        paths = []
+        if mime.hasUrls():
+            for u in mime.urls():
+
+                p = u.toLocalFile()
+                if p and p.lower().endswith(".ics"):
+                    paths.append(p)
+        if not paths and mime.hasText():
+            for line in mime.text().splitlines():
+                s = line.strip()
+
+                if s.startswith("file://"):
+                    p = QUrl(s).toLocalFile()
+                    if p and p.lower().endswith(".ics"):
+                        paths.append(p)
+        # de-dupe
+        return list(dict.fromkeys(paths))
+
+
+# ===========================
+# HTML-Templates (Window + Day)
+# ===========================
+# (Original-Template, mit Hinzufügung von ".is-today" Styling)
+WINDOW_HTML_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>Kalender</title>
+  <style>
+    :root {
+      --bg:#1c1f24;
+      --panel:#2a2f35;
+      --text:#e8e8e8;
+      --muted:#a9b0b7;
+      --border:#3a4048;
+      --chip:#3c4550;
+      /* NEU: Farben für "Heute"-Hervorhebung */
+      --today-bg: rgba(138, 180, 248, 0.1);
+      --today-border: #8ab4f8;
+    }
+    body.theme-light {
+      --bg: #ffffff;
+      --panel: #f5f5f5;
+      --text: #1a1a1a;
+      --muted: #666666;
+      --border: #d0d0d0;
+      --chip: #e0e0e0;
+      --today-bg: rgba(0, 122, 255, 0.1);
+      --today-border: #007aff;
+    }
+    * { box-sizing: border-box; }
+    html, body, .wrap {
+      height: 100vh;
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+    }
+    .wrap { flex-grow: 1; display: flex; flex-direction: column; height: 100%; }
+    .toolbar {
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+      padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .toolbar .left, .toolbar .right { display: flex; align-items: center; gap: 8px; }
+    .btn {
+      background: var(--chip); color: var(--text); border: 1px solid var(--border);
+      padding: 8px 14px; border-radius: 10px; cursor: pointer; font-weight: 600; user-select: none;
+    }
+    .btn:hover { filter: brightness(1.1); background: var(--panel); }
+
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 12px; padding: 8px 14px;
+      background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; user-select: none;
+    }
+    .legend-item { display: flex; flex-wrap: wrap;
+      gap: 12px; padding: 8px 14px;
+      background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; user-select: none;
+    }
+    .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.9em; color: var(--muted); }
+    .legend-color { width: 14px; height: 14px; border-radius: 4px; flex-shrink: 0; }
+
+    #calendar {
+      flex-grow: 1; display: grid; grid-template-columns: repeat(7, 1fr);
+      gap: 8px;
+      padding: 10px; overflow-y: auto;
+      background: var(--bg);
+    }
+
+    .day-label { font-weight: 600; color: var(--muted); font-size: 0.92em; margin-bottom: 2px; }
+
+    .day {
+      background: var(--panel); border-radius: 12px; padding: 8px;
+      display: flex; flex-direction: column; box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+      transition: background-color 0.3s ease; user-select: none; overflow: hidden;
+      border: 2px solid transparent; /* NEU: Platz für Rand */
+    }
+    body.theme-light .day {
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    /* NEU: Styling für "Heute" */
+    .day.is-today {
+        background: var(--today-bg);
+        border-color: var(--today-border);
+    }
+    .day.is-today .date-num {
+        color: var(--today-border);
+    }
+    /* --- */
+
+    .date-num { font-size: 1em; font-weight: 700; color: var(--muted); margin-bottom: 6px; flex-shrink: 0; }
+    .events { flex: 1 1 auto; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+    .event {
+      font-size: 0.8em; padding: 4px 6px; border-radius: 8px;
+      white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3); color: #fff; transition: filter 0.2s ease;
+    }
+    body.theme-light .event {
+      box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    }
+    .event:hover { filter: brightness(1.1); }
+
+    .other-month { opacity: 0.32; }
+
+    .month-header {
+      text-align: center; font-size: 1.4em; font-weight: 700; padding: 10px 0;
+      background: var(--panel); border-bottom: 1px solid var(--border); color: var(--text);
+      flex-shrink: 0; user-select: none;
+    }
+  </style>
+</head>
+<body class="theme-__THEME__">
+<div class="wrap">
+  <div class="toolbar">
+    <div class="left">
+      <button class="btn" onclick="prev()">◀</button>
+      <button class="btn" onclick="next()">▶</button>
+    </div>
+    <div class="right">
+      <span id="title" style="color:var(--muted)"></span>
+    </div>
+  </div>
+
+  <div class="legend" id="legend"></div>
+  <div class="month-header" id="monthHeader"></div>
+  <div id="calendar"></div>
+</div>
+
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <script>
+  const EVENTS_JSON = __EVENTS__;
+  let currentMode = "__MODE__"; // "week" | "two_weeks" | "month"
+  let currentDate = new Date("__TODAY__");
+  // NEU: Referenz für "Heute"
+  const todayDate = new Date("__TODAY__");
+  todayDate.setHours(0,0,0,0);
+  
+  // WebChannel für Löschen von Terminen
+  let calendarAPI = null;
+  if (typeof qt !== 'undefined' && typeof qt.webChannelTransport !== 'undefined') {
+    new QWebChannel(qt.webChannelTransport, function(channel) {
+      calendarAPI = channel.objects.calendarAPI;
+    });
+  }
+  function parseLocalISO(s){
+    const [datePart, timePart] = String(s).split("T");
+    const [y,m,d] = datePart.split("-").map(Number);
+    if(!timePart) return new Date(y, m-1, d);
+    const clean = timePart.replace("Z","");
+    const [hh="0", mm="0", ss="0"] = clean.split(":");
+    return new Date(y, m-1, d, parseInt(hh||"0"), parseInt(mm||"0"), parseInt(ss||"0"));
+  }
+
+  const events = EVENTS_JSON.map(ev=>{
+    let s = parseLocalISO(ev.start);
+    let e = ev.end ? parseLocalISO(ev.end) : null;
+    if(!e || e <= s) e = new Date(s.getTime()+60*60*1000);
+    return {...ev, startDate:s, endDate:e, allDay:!!ev.allDay};
+  });
+  function startOfWeekMonday(d){
+    const tmp = new Date(d);
+    const dow = (tmp.getDay()+6)%7;
+    tmp.setDate(tmp.getDate()-dow);
+    tmp.setHours(0,0,0,0);
+    return tmp;
+  }
+
+  function setClientTitle(){
+    const t = document.getElementById("title");
+    const fmt = d => d.toLocaleDateString();
+    if(currentMode==="week"){
+      const start = startOfWeekMonday(currentDate);
+      const end = new Date(start); end.setDate(start.getDate()+6);
+      t.textContent = `Woche: ${fmt(start)} – ${fmt(end)}`;
+    }else if(currentMode==="two_weeks"){
+      const start = startOfWeekMonday(currentDate);
+      const end = new Date(start); end.setDate(start.getDate()+13);
+      t.textContent = `2 Wochen: ${fmt(start)} – ${fmt(end)}`;
+    }else{
+      t.textContent = currentDate.toLocaleDateString(undefined, {month:"long", year:"numeric"});
+    }
+  }
+
+  function buildLegend(){
+    const legend = document.getElementById("legend");
+    legend.innerHTML = "";
+    const byCalendar = {};
+    events.forEach(ev => { byCalendar[ev.calendar] = ev.color; });
+    Object.entries(byCalendar).forEach(([cal, color])=>{
+      const item = document.createElement("div");
+      item.className = "legend-item";
+      item.innerHTML = `<span class="legend-color" style="background:${color}"></span> ${cal}`;
+      legend.appendChild(item);
+    });
+  }
+
+  function render(){
+    setClientTitle();
+    buildLegend();
+    if(currentMode==="month"){
+      setMonthHeader();
+      renderMonth();
+    }else{
+      document.getElementById("monthHeader").textContent = "";
+      if(currentMode==="week") renderDays(7);
+      else if(currentMode==="two_weeks") renderDays(14);
+    }
+  }
+
+  function setMonthHeader(){
+    const header = document.getElementById("monthHeader");
+    const options = {month:'long', year:'numeric'};
+    header.textContent = currentDate.toLocaleDateString(undefined, options);
+  }
+
+  function renderDays(numDays){
+    const container = document.getElementById("calendar");
+    container.innerHTML = "";
+    container.style.gridTemplateColumns = "repeat(7, 1fr)";
+    container.style.gridTemplateRows = `repeat(${Math.ceil(numDays/7)}, 1fr)`;
+
+    const start = startOfWeekMonday(currentDate);
+    for(let i=0;i<numDays;i++){
+      const d0 = new Date(start);
+      d0.setDate(start.getDate()+i);
+      makeDayBox(d0, container);
+    }
+  }
+
+  function renderMonth(){
+    const container = document.getElementById("calendar");
+    container.innerHTML = "";
+    container.style.gridTemplateColumns = "repeat(7, 1fr)";
+    container.style.gridTemplateRows = "repeat(6, 1fr)";
+
+    const first = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+    const start = startOfWeekMonday(first);
+    // ensure Monday start
+
+    for(let i=0;i<42;i++){
+      const d0 = new Date(start);
+      d0.setDate(start.getDate()+i);
+      const box = makeDayBox(d0, container);
+      if(d0.getMonth() !== currentDate.getMonth()){
+        box.classList.add("other-month");
+      }
+    }
+  }
+
+  // NEU: Hilfsfunktion
+  function isSameDay(d1, d2) {
+      return d1.getFullYear() === d2.getFullYear() &&
+             d1.getMonth() === d2.getMonth() &&
+             d1.getDate() === d2.getDate();
+  }
+
+  function makeDayBox(d0, container){
+    const box = document.createElement("div");
+    box.className = "day";
+    // NEU: Klasse hinzufügen, wenn "Heute"
+    if (isSameDay(d0, todayDate)) {
+        box.classList.add("is-today");
+    }
+    // ---
+
+    const dateNum = document.createElement("div");
+    dateNum.className = "date-num";
+    dateNum.textContent = d0.getDate();
+    box.appendChild(dateNum);
+    const evWrap = document.createElement("div");
+    evWrap.className = "events";
+    box.appendChild(evWrap);
+
+    const dayStart = new Date(d0); dayStart.setHours(0,0,0,0);
+    const dayEnd = new Date(d0); dayEnd.setHours(23,59,59,999);
+    const dayEvents = events.filter(ev => ev.startDate <= dayEnd && ev.endDate > dayStart);
+    dayEvents.sort((a,b)=>{
+      const aAll = !!a.allDay, bAll = !!b.allDay;
+      if(aAll!==bAll) return aAll ? -1 : 1;
+      return a.startDate - b.startDate;
+    });
+    dayEvents.forEach(ev=>{
+      const el = document.createElement("div");
+      el.className = "event";
+      el.style.background = ev.color;
+      el.style.cursor = "pointer";
+      el.title = "Rechtsklick zum Löschen";
+
+      if(ev.allDay){
+        el.textContent = ev.title;
+      }else{
+        const st = ev.startDate.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+        const et = ev.endDate.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+        el.textContent = `${st} – ${et} ${ev.title}`;
+      }
+      
+      // Rechtsklick zum Löschen
+      el.addEventListener("contextmenu", function(e) {
+        e.preventDefault();
+        if (calendarAPI && ev.uid && ev.path) {
+          if (confirm(`Möchten Sie den Termin "${ev.title}" wirklich löschen?`)) {
+            calendarAPI.delete_event(ev.uid, ev.path, ev.start);
+          }
+        }
+      });
+      
+      evWrap.appendChild(el);
+
+    });
+
+    container.appendChild(box);
+    return box;
+  }
+
+  function prev(){
+    if(currentMode==="week"){
+      currentDate.setDate(currentDate.getDate()-7);
+    }else if(currentMode==="two_weeks"){
+      currentDate.setDate(currentDate.getDate()-14);
+    }else{
+      currentDate.setMonth(currentDate.getMonth()-1);
+    }
+    render();
+  }
+
+  function next(){
+    if(currentMode==="week"){
+      currentDate.setDate(currentDate.getDate()+7);
+    }else if(currentMode==="two_weeks"){
+      currentDate.setDate(currentDate.getDate()+14);
+    }else{
+      currentDate.setMonth(currentDate.getMonth()+1);
+    }
+    render();
+  }
+
+  render();
+</script>
+
+</body>
+</html>
+"""
+
+# (Dies ist dein exaktes Original-Template)
+DAY_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Tagesansicht</title>
+  <style>
+    :root {
+      --bg: #1e1e1e;
+      --text: #ddd;
+      --border: #333;
+      --panel: #2a2a2a;
+      --event-bg: #3a82f6;
+    }
+    body.theme-light {
+      --bg: #ffffff;
+      --text: #1a1a1a;
+      --border: #d0d0d0;
+      --panel: #f5f5f5;
+      --event-bg: #007aff;
+    }
+    html, body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      color: var(--text);
+      transition: background 0.25s ease, color 0.25s ease;
+    }
+
+    .day-view {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .all-day {
+      border-bottom: 1px solid var(--border);
+      padding: 0px;
+      background: var(--panel);
+      min-height: 0px;
+    }
+    .all-day-event {
+      display: inline-block;
+      background: var(--event-bg);
+      color: white;
+      padding: 2px 6px;
+      margin: 2px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+
+    .hours {
+      flex: 1;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 80px);
+    }
+    .hour {
+      border-top: 1px solid var(--border);
+      flex: 1;
+      position: relative;
+    }
+    .hour-label {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 50px;
+      text-align: right;
+      font-size: 11px;
+      color: var(--muted, #aaa);
+      padding-right: 5px;
+    }
+
+    .event {
+      position: absolute;
+      left: 60px;
+      right: 10px;
+      background: var(--event-bg);
+      border-radius: 4px;
+      padding: 4px;
+      color: #fff;
+      font-size: 12px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body class="theme-__THEME__">
+  <div class="day-view">
+    <div class="all-day" id="allDayEvents"></div>
+    <div class="hours" id="hours">
+      <div class="hour"><div class="hour-label">00:00</div></div>
+      <div class="hour"><div class="hour-label">01:00</div></div>
+      <div class="hour"><div class="hour-label">02:00</div></div>
+      <div class="hour"><div class="hour-label">03:00</div></div>
+      <div class="hour"><div class="hour-label">04:00</div></div>
+      <div class="hour"><div class="hour-label">05:00</div></div>
+      <div class="hour"><div class="hour-label">06:00</div></div>
+      <div class="hour"><div class="hour-label">07:00</div></div>
+      <div class="hour"><div class="hour-label">08:00</div></div>
+      <div class="hour"><div class="hour-label">09:00</div></div>
+
+      <div class="hour"><div class="hour-label">10:00</div></div>
+      <div class="hour"><div class="hour-label">11:00</div></div>
+      <div class="hour"><div class="hour-label">12:00</div></div>
+      <div class="hour"><div class="hour-label">13:00</div></div>
+      <div class="hour"><div class="hour-label">14:00</div></div>
+      <div class="hour"><div class="hour-label">15:00</div></div>
+      <div class="hour"><div class="hour-label">16:00</div></div>
+      <div class="hour"><div class="hour-label">17:00</div></div>
+      <div class="hour"><div class="hour-label">18:00</div></div>
+      <div class="hour"><div class="hour-label">19:00</div></div>
+      <div class="hour"><div class="hour-label">20:00</div></div>
+      <div class="hour"><div class="hour-label">21:00</div></div>
+
+      <div class="hour"><div class="hour-label">22:00</div></div>
+      <div class="hour"><div class="hour-label">23:00</div></div>
+    </div>
+  </div>
+
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <script>
+    const events = __EVENTS__;
+    
+    // WebChannel für Löschen von Terminen
+    let calendarAPI = null;
+    if (typeof qt !== 'undefined' && typeof qt.webChannelTransport !== 'undefined') {
+      new QWebChannel(qt.webChannelTransport, function(channel) {
+        calendarAPI = channel.objects.calendarAPI;
+      });
+    }
+    
+    function renderEvents() {
+      const hoursDiv = document.getElementById("hours");
+      const allDayDiv = document.getElementById("allDayEvents");
+      const totalMinutes = 24 * 60;
+      const hourHeight = hoursDiv.clientHeight || (window.innerHeight - 80);
+      const pxPerMinute = hourHeight / totalMinutes;
+      // remove old events
+      [...document.querySelectorAll(".event")].forEach(e => e.remove());
+      allDayDiv.innerHTML = "";
+      events.forEach(ev => {
+        if(ev.allDay) {
+          const span = document.createElement("span");
+          span.className = "all-day-event";
+          span.textContent = ev.title;
+          span.style.cursor = "pointer";
+          span.title = "Rechtsklick zum Löschen";
+          span.addEventListener("contextmenu", function(e) {
+            e.preventDefault();
+            if (calendarAPI && ev.uid && ev.path) {
+              if (confirm(`Möchten Sie den Termin "${ev.title}" wirklich löschen?`)) {
+                calendarAPI.delete_event(ev.uid, ev.path);
+              }
+            }
+          });
+          allDayDiv.appendChild(span);
+        } else {
+          const start = ev.startH * 60 + ev.startM;
+          const end = ev.endH * 60 + ev.endM;
+
+          const top = start * pxPerMinute;
+          const height = Math.max((end - start) * pxPerMinute, 18);
+
+          const div = document.createElement("div");
+          div.className = "event";
+          div.style.top = top + "px";
+          div.style.height = height + "px";
+          div.style.background = ev.color;
+          div.style.cursor = "pointer";
+          div.title = "Rechtsklick zum Löschen";
+          div.innerHTML = ev.title + "<br>" +
+                          String(ev.startH).padStart(2,"0") + ":" + String(ev.startM).padStart(2,"0") +
+                          " - " +
+                          String(ev.endH).padStart(2,"0") + ":" + String(ev.endM).padStart(2,"0");
+          div.addEventListener("contextmenu", function(e) {
+            e.preventDefault();
+            if (calendarAPI && ev.uid && ev.path) {
+              if (confirm(`Möchten Sie den Termin "${ev.title}" wirklich löschen?`)) {
+                calendarAPI.delete_event(ev.uid, ev.path);
+              }
+            }
+          });
+          hoursDiv.appendChild(div);
+        }
+      });
+    }
+
+    window.addEventListener("resize", renderEvents);
+    window.addEventListener("load", renderEvents);
+    // call after a short delay in case webview sizing isn't immediate
+    setTimeout(renderEvents, 120);
+  </script>
+</body>
+</html>
+"""
+
+# ===========================
+# Programmstart
+# ===========================
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    # optional: pass "Popup" as first arg to start popup mode
+    mode = "Window"
+    if len(sys.argv) > 1 and sys.argv[1].lower() in ("popup", "--popup", "-popup"):
+        mode = "Popup"
+    w = PluginWidget(mode=mode)
+    w.show()
+    sys.exit(app.exec_())
