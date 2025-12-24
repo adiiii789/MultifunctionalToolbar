@@ -1,4 +1,4 @@
-# --- tray_launcher.py (HTML lightswitch + safe back + search + stability + TABS v2 + Settings) ---
+# --- tray_launcher.py (Settings Page inside Main Window + Solid Opaque Fix) ---
 
 # TO MAKE EXE OF TRAYLAUNCHER USE FOLLOWING COMMAND IN TERMINAL:
 # pyinstaller --noconsole --onefile --icon=ProgrammIcon.ico --add-data "scripts;scripts" tray_launcher.py
@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QSystemTrayIcon, QMainWindow, QSizePolicy, QHBoxLayout, QLabel,
     QStackedWidget, QMessageBox, QScrollArea, QLineEdit, QFileDialog,
-    QTabWidget, QTabBar, QDialog, QRadioButton, QButtonGroup
+    QTabWidget, QTabBar, QRadioButton, QButtonGroup, QFrame
 )
 from PyQt5.QtGui import QCursor, QIcon, QColor, QGuiApplication
 from PyQt5.QtCore import (
@@ -371,7 +371,7 @@ QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
 # --- Theme & Global Config ---
 theme = "dark"
 mode = "Window"
-use_glass_mode = True  # Default: Glas an (damit auch forced Dark Mode)
+use_glass_mode = True  # Default: Glas an
 
 
 def is_dark():
@@ -386,7 +386,7 @@ def current_stylesheet():
         # Glas/Transparent Basis -> Text weiß
         return "QWidget { background-color: transparent; color: #FFFFFF; }"
     else:
-        # Opaque Basis
+        # Opaque Basis - Globaler Hintergrund
         if is_dark():
             return "QWidget { background-color: #2E2E2E; color: #FFFFFF; }"
         else:
@@ -401,17 +401,18 @@ def glass_css():
                 "border: 1px solid rgba(255,255,255,0.08);"
                 "border-radius: 14px;")
     else:
-        # Opaque / Solide Styles
+        # Opaque / Solide Styles (100% deckend)
+        # Reduzierter Radius für klassischeren Look
         if theme == "light":
             # Hell & Solide
             return ("background: #FFFFFF;"
                     "border: 1px solid #CCC;"
-                    "border-radius: 14px; color: #333;")
+                    "border-radius: 6px; color: #333;")
         else:
             # Dunkel & Solide
             return ("background: #2E2E2E;"
                     "border: 1px solid #444;"
-                    "border-radius: 14px; color: #FFF;")
+                    "border-radius: 6px; color: #FFF;")
 
 
 def glass_button_css():
@@ -424,18 +425,18 @@ def glass_button_css():
                 "border-radius: 10px;")
         hover = "background: rgba(255,255,255,0.14);"
     else:
-        # Opaque
+        # Opaque (Solider)
         if theme == "light":
             base = ("background: #E0E0E0;"
                     "color: #1a1a1a;"
                     "border: 1px solid #BBB;"
-                    "border-radius: 10px;")
+                    "border-radius: 6px;")
             hover = "background: #D0D0D0;"
         else:
             base = ("background: #3E3E3E;"
                     "color: #f1f1f1;"
                     "border: 1px solid #555;"
-                    "border-radius: 10px;")
+                    "border-radius: 6px;")
             hover = "background: #4E4E4E;"
     return base, hover
 
@@ -443,13 +444,16 @@ def glass_button_css():
 def set_theme(new_theme, app=None):
     global theme
     theme = new_theme
-    # Property setzen, damit Listener reagieren
+    # Stylesheet global setzen (wichtig für Opaque Modus)
+    style = current_stylesheet()
     if app is not None:
         app.setProperty("toolbar_theme", theme)
+        app.setStyleSheet(style)
     else:
         inst = QApplication.instance()
         if inst is not None:
             inst.setProperty("toolbar_theme", theme)
+            inst.setStyleSheet(style)
 
 
 def ensure_sample_plugin(script_root: str):
@@ -748,66 +752,94 @@ class ThemeBridge(QObject):
             self.main_window.go_back_to_explorer()
 
 
-# --- SETTINGS DIALOG ---
-class SettingsDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Einstellungen")
-        self.setFixedSize(300, 200)
-        self.setStyleSheet("""
-            QDialog { background: #333; color: #FFF; }
-            QRadioButton { color: #FFF; font-size: 14px; padding: 5px; }
-            QPushButton { background: #555; color: #FFF; border: 1px solid #777; padding: 6px; border-radius: 4px; }
-            QPushButton:hover { background: #666; }
-        """)
+# --- SETTINGS PAGE (Within Main Window) ---
+class SettingsPage(QWidget):
+    def __init__(self, parent_main):
+        super().__init__()
+        self.parent_main = parent_main
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(20, 20, 20, 20)
+        self.lay.setSpacing(15)
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Design-Modus wählen:", self))
+        # Titel
+        title = QLabel("Einstellungen")
+        title.setStyleSheet("font-size: 22px; font-weight: bold; margin-bottom: 10px;")
+        self.lay.addWidget(title)
 
-        self.group = QButtonGroup(self)
+        # Design Bereich
+        group_box = QFrame()
+        group_box.setStyleSheet("background: rgba(255,255,255,0.05); border-radius: 8px; padding: 10px;")
+        gb_lay = QVBoxLayout(group_box)
 
-        self.rb_opaque = QRadioButton("Klassisch (Opaque)\n[Light & Dark möglich]")
-        self.rb_glass = QRadioButton("Transparent (Glas)\n[Nur Dark Mode]")
+        lbl_design = QLabel("Design-Modus:")
+        lbl_design.setStyleSheet("font-size: 16px; font-weight: 600;")
+        gb_lay.addWidget(lbl_design)
 
-        self.group.addButton(self.rb_opaque)
-        self.group.addButton(self.rb_glass)
-        layout.addWidget(self.rb_opaque)
-        layout.addWidget(self.rb_glass)
+        self.rb_opaque = QRadioButton("Klassisch (Opaque)\n[Volldeckend, Light & Dark Mode verfügbar]")
+        self.rb_glass = QRadioButton("Transparent (Glas)\n[Durchscheinend, nur Dark Mode]")
 
-        # Set current state
+        # Styles für Radio Buttons
+        rb_style = """
+            QRadioButton { font-size: 14px; padding: 5px; }
+            QRadioButton::indicator { width: 16px; height: 16px; }
+        """
+        self.rb_opaque.setStyleSheet(rb_style)
+        self.rb_glass.setStyleSheet(rb_style)
+
+        gb_lay.addWidget(self.rb_opaque)
+        gb_lay.addWidget(self.rb_glass)
+
+        self.lay.addWidget(group_box)
+
+        # Button Group logic
+        self.bg = QButtonGroup(self)
+        self.bg.addButton(self.rb_opaque)
+        self.bg.addButton(self.rb_glass)
+        self.bg.buttonClicked.connect(self.on_change)
+
+        self.lay.addStretch()
+
+        # Back Button inside Settings Page
+        btn_back = QPushButton("Speichern & Zurück")
+        btn_back.setFixedHeight(40)
+        # Button Style inline, da SettingsPage auch gestyled werden muss
+        self.lay.addWidget(btn_back)
+        btn_back.clicked.connect(self.go_back)
+        self.btn_back = btn_back
+
+        self.update_ui_state()
+
+    def update_ui_state(self):
         if use_glass_mode:
             self.rb_glass.setChecked(True)
         else:
             self.rb_opaque.setChecked(True)
 
-        layout.addStretch()
+        # Style update für Settings Page Elemente
+        base, hover = glass_button_css()
+        self.btn_back.setStyleSheet(f"QPushButton {{ {base} font-weight: bold; }} QPushButton:hover {{ {hover} }}")
 
-        btn_layout = QHBoxLayout()
-        ok_btn = QPushButton("Speichern")
-        ok_btn.clicked.connect(self.accept)
-        cancel_btn = QPushButton("Abbrechen")
-        cancel_btn.clicked.connect(self.reject)
+        # Text Farben anpassen
+        color = "#FFFFFF" if is_dark() else "#000000"
+        self.setStyleSheet(f"color: {color};")
 
-        btn_layout.addWidget(ok_btn)
-        btn_layout.addWidget(cancel_btn)
-        layout.addLayout(btn_layout)
-
-    def accept(self):
+    def on_change(self, btn):
         global use_glass_mode, theme
-        old_glass = use_glass_mode
-
         if self.rb_glass.isChecked():
             use_glass_mode = True
             theme = "dark"  # Force Dark
         else:
             use_glass_mode = False
-            # Theme beibehalten oder default
+            # Theme beibehalten
 
-        super().accept()
+        # Sofortiges Update der UI
+        if self.parent_main:
+            self.parent_main.refresh_all_styles()
+        self.update_ui_state()
 
-        # Trigger update on parent
-        if self.parent() and hasattr(self.parent(), "refresh_all_styles"):
-            self.parent().refresh_all_styles()
+    def go_back(self):
+        if self.parent_main:
+            self.parent_main.go_back_to_explorer()
 
 
 class PopupWindow(ButtonContentMixin, QWidget):
@@ -1002,7 +1034,8 @@ class PopupWindow(ButtonContentMixin, QWidget):
         self._update_relative_size();
         self.setFixedSize(self.width_size, self.height_size)
 
-        # Styles aktualisieren je nach Modus
+        # WICHTIG: Styles aktualisieren. Falls GlassMode aus ist, liefert glass_css() jetzt eine solide Farbe.
+        # Da WA_TranslucentBackground True ist, müssen wir sicherstellen, dass wir eine opake Farbe zeichnen.
         self.explorer_container.setStyleSheet(glass_css())
 
         cur = QCursor.pos();
@@ -1022,14 +1055,13 @@ class PopupWindow(ButtonContentMixin, QWidget):
 class MainAppWindow(QMainWindow, ButtonContentMixin):
     def __init__(self, app, popup=None):
         super().__init__()
+        self.setWindowTitle("Multifunctional Toolbar")
         self.setWindowIcon(QIcon("ProgrammIcon.ico") if os.path.exists("ProgrammIcon.ico") else QIcon())
         self.app = app;
         self.popup = popup
         self._update_relative_size();
         self.setMinimumSize(self.width_size, self.height_size)
 
-        # Translucent Attribut ist wichtig für Glas-Modus
-        # Im Opaque Modus stört es nicht zwingend, aber wir müssen den Background dann solid malen.
         self.setAttribute(Qt.WA_TranslucentBackground, True)
 
         self._search_query = ""
@@ -1111,7 +1143,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self._update_scrollbar_theme()
         self.scroll_area.setWidget(self.button_container)
 
-        self.pages.addWidget(self.scroll_area);
+        self.pages.addWidget(self.scroll_area);  # Index 0
 
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabsClosable(True)
@@ -1119,7 +1151,11 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.tab_widget.setMovable(True)
         self.tab_widget.tabBar().setDrawBase(False)
         self.tab_widget.tabCloseRequested.connect(self.close_tab)
-        self.pages.addWidget(self.tab_widget)
+        self.pages.addWidget(self.tab_widget)  # Index 1
+
+        # --- Settings Page (Index 2) ---
+        self.settings_page = SettingsPage(self)
+        self.pages.addWidget(self.settings_page)
 
         self.central_layout.addWidget(self.pages)
         self.setCentralWidget(self.central)
@@ -1133,11 +1169,12 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
         self.search_input.textChanged.connect(self.search_plugins)
 
     def open_settings(self):
-        dlg = SettingsDialog(self)
-        dlg.exec_()
+        # Wechsle zur Settings Page
+        self.pages.setCurrentWidget(self.settings_page)
+        # Toolbar Button für Explorer evtl. anzeigen oder Back-Logik
+        # Hier lassen wir den Settings Page Back button die Arbeit machen
 
     def refresh_all_styles(self):
-        # Wird vom SettingsDialog aufgerufen
         set_theme(theme, self.app)
 
         # 1. Update CSS Vars
@@ -1179,7 +1216,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                     background: {'#444' if is_dark() else '#DDD'}; 
                     color: {'#FFF' if is_dark() else '#333'};
                     border: 1px solid {'#666' if is_dark() else '#AAA'};
-                    border-radius: 10px; font-size: 16px;
+                    border-radius: 6px; font-size: 16px;
                 }}
                 QPushButton:hover {{ background: {'#555' if is_dark() else '#CCC'}; }}
             """)
@@ -1191,7 +1228,7 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                 color: {'#ffecec' if is_dark() else '#3a1a1a'};
                 font-weight: 700;
                 border: 1px solid {'rgba(255,120,120,0.35)' if is_dark() else 'rgba(255,120,120,0.32)'};
-                border-radius: 10px;
+                border-radius: {'10px' if use_glass_mode else '6px'};
                 padding: 6px 12px;
             }}
             QPushButton:hover {{
@@ -1297,12 +1334,12 @@ class MainAppWindow(QMainWindow, ButtonContentMixin):
                 }}
             """)
         else:
-            # Opaque Style
+            # Opaque Style (Klassisch)
             self.search_input.setStyleSheet(f"""
                 QLineEdit {{
                     background: {'#292929' if is_dark() else '#ffffff'};
                     color: {'#ffffff' if is_dark() else '#292929'};
-                    padding: 8px 10px; border-radius: 12px;
+                    padding: 8px 10px; border-radius: 6px;
                     border: 1.5px solid {'#777777' if is_dark() else '#888888'};
                     outline: none;
                 }}
