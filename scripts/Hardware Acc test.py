@@ -1,3 +1,8 @@
+# --- Plugin-Parameter (neues System) ---
+NAME = "Hardware Acc Test"
+ICON = "🖥️"
+# ----------------------------------------
+
 import sys
 from PyQt5.QtCore import QUrl
 from PyQt5.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QApplication

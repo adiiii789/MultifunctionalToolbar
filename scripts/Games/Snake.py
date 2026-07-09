@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# --- Plugin-Parameter (neues System) ---
+NAME = "Snake"
+ICON = "🐍"
+# ----------------------------------------
+
 """
 pro_snake_html.py
 PyQt5 plugin that embeds the original Snake single-file HTML (kept exactly as provided).

@@ -1,3 +1,8 @@
+# --- Plugin-Parameter (neues System) ---
+NAME = "To-Do"
+ICON = "✅"
+# ----------------------------------------
+
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget, QMainWindow
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
 from PyQt5.QtCore import QUrl, QEvent, QObject, pyqtSignal

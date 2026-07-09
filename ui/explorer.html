@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html data-theme="dark">
+<head>
+<meta charset="utf-8">
+<style>
+  /* ==== Farbschema (identisch zum Qt-Original) ============================ */
+  :root {
+    --text: #fff;
+    --folder-bg: #3A4A6A;  --folder-hover: #4B5B6B;
+    --file-bg:   #3A3A3A;  --file-hover:   #505050;
+    --card-bg:   transparent;  --card-hover:   transparent;
+    --back-bg:   #666666;  --back-hover:   #777777;  --back-text: #FFFFFF;
+    --scroll-track: #292929;  --scroll-handle: #666;
+  }
+  html[data-theme="light"] {
+    --text: #000;
+    --folder-bg: #c2d1ff;  --folder-hover: #a1b8ff;
+    --file-bg:   #EEEEEE;  --file-hover:   #CCCCCC;
+    --card-bg:   transparent;  --card-hover:   transparent;
+    --back-bg:   #BBBBBB;  --back-hover:   #CCCCCC;  --back-text: #000000;
+    --scroll-track: #ffffff;  --scroll-handle: #666;
+  }
+  html[data-theme="light"][data-compact="true"] {
+    --scroll-track: #d6d6d6;  --scroll-handle: #999;
+  }
+
+  html, body { margin: 0; padding: 0; background: transparent; }
+  body { font: 12px "Segoe UI", system-ui, sans-serif; color: var(--text); }
+
+  ::-webkit-scrollbar { width: 10px; }
+  ::-webkit-scrollbar-track { background: var(--scroll-track); border-radius: 5px; }
+  ::-webkit-scrollbar-thumb { background: var(--scroll-handle); border-radius: 5px; min-height: 20px; }
+
+  #list { display: flex; flex-direction: column; }
+
+  .entry-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; border: none; cursor: pointer;
+    color: var(--text); font: inherit; padding: 0;
+  }
+  .folder { background: var(--folder-bg); }
+  .folder:hover { background: var(--folder-hover); }
+  .file { background: var(--file-bg); }
+  .file:hover { background: var(--file-hover); }
+  .entry-icon { height: 24px; width: 24px; object-fit: contain; margin-right: 8px; }
+  .back { background: var(--back-bg); color: var(--back-text); font-weight: bold; min-height: 40px; }
+  .back:hover { background: var(--back-hover); }
+
+  .card {
+    background: var(--card-bg); border-radius: 8px;
+    padding-left: 8px; padding-right: 8px; box-sizing: border-box;
+  }
+  .card:hover { background: var(--card-hover); }
+  .card iframe { border: none; width: 100%; display: block; background: transparent; }
+</style>
+</head>
+<body>
+<div id="list"></div>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script>
+  let state = null;
+
+  function render() {
+    if (!state) return;
+    document.documentElement.setAttribute('data-theme', state.theme);
+    document.documentElement.setAttribute('data-compact', state.compact ? 'true' : 'false');
+    const list = document.getElementById('list');
+    list.innerHTML = '';
+
+    if (!state.isRoot) {
+      const b = document.createElement('button');
+      b.className = 'entry-btn back';
+      b.textContent = '← Zurück';
+      b.onclick = () => window.explorer && window.explorer.goBack();
+      list.appendChild(b);
+    }
+
+    for (const e of state.entries) {
+      if (e.type === 'folder') {
+        const b = document.createElement('button');
+        b.className = 'entry-btn folder';
+        b.style.minHeight = e.height + 'px';
+        b.textContent = e.name;
+        b.onclick = () => window.explorer && window.explorer.enterDir(e.path);
+        list.appendChild(b);
+      } else if (e.type === 'file') {
+        const b = document.createElement('button');
+        b.className = 'entry-btn file';
+        b.style.minHeight = e.height + 'px';
+        if (e.icon) {
+          const im = document.createElement('img');
+          im.className = 'entry-icon';
+          im.src = e.icon;
+          b.appendChild(im);
+        }
+        b.appendChild(document.createTextNode(e.label));
+        if (e.opacity) b.style.opacity = e.opacity;
+        b.onclick = () => window.explorer && window.explorer.open(e.path);
+        list.appendChild(b);
+      } else if (e.type === 'card') {
+        const d = document.createElement('div');
+        d.className = 'card';
+        d.style.height = e.height + 'px';
+        d.style.paddingTop = e.padTop + 'px';
+        d.style.paddingBottom = e.padBottom + 'px';
+        const f = document.createElement('iframe');
+        f.setAttribute('scrolling', 'no');
+        f.style.height = (e.height - e.padTop - e.padBottom) + 'px';
+        if (e.kind === 'url') { f.src = e.url; } else { f.srcdoc = e.content; }
+        d.appendChild(f);
+        list.appendChild(d);
+      }
+    }
+  }
+
+  // Wird von Python (push_state) aufgerufen
+  window.renderState = function (s) {
+    if (typeof s === 'string') s = JSON.parse(s);
+    state = s;
+    render();
+  };
+
+  // Karten (iframes) melden Linkklicks hierher
+  window.openLinkFromCard = function (url) {
+    if (window.explorer) window.explorer.openLink(url);
+  };
+
+  // Karten koennen damit direkt Plugins oeffnen: openPlugin('Name.py')
+  window.openPluginFromCard = function (p, from) {
+    if (window.explorer) window.explorer.openPlugin(p || '', from || '');
+  };
+
+  // Backend-Aufrufe der Karten: pluginCall('methode', {...}, cb) im iframe
+  window.pluginCallFromCard = function (path, method, argsJson, cb) {
+    if (window.explorer) window.explorer.callPlugin(path, method, argsJson, cb);
+  };
+
+  new QWebChannel(qt.webChannelTransport, function (channel) {
+    window.explorer = channel.objects.explorer;
+    window.media = channel.objects.media;   // fuer Karten-iframes erreichbar
+    window.explorer.getState(function (s) { window.renderState(s); });
+  });
+</script>
+</body>
+</html>

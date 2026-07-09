@@ -1,3 +1,8 @@
+# --- Plugin-Parameter (neues System) ---
+NAME = "Zeichenheft"
+ICON = "✏️"
+# ----------------------------------------
+
 # scripts/pro_canvas_html_v1_singlefile.py
 import os
 import sys

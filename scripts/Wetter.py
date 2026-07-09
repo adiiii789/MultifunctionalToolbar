@@ -1,3 +1,8 @@
+# --- Plugin-Parameter (neues System) ---
+HTML_BUTTON = True  # ersetzt den alten "[html]"-Dateiprefix
+NAME = "Wetter"
+# ----------------------------------------
+
 # [HTML] weather_dual_stuttgart.py
 # Inline: Stadt, Temperatur, Regen-Chance (Open-Meteo), 1 Button "Regenradar"
 # Klick: öffnet Windy-Embed (Regen-Layer) mit Overlay "Regenwahrscheinlichkeit" oben rechts

@@ -1,3 +1,8 @@
+# --- Plugin-Parameter (neues System) ---
+NAME = "Notizen"
+ICON = "📝"
+# ----------------------------------------
+
 # scripts/pro_flappy_html_v3_singlefile.py
 import os
 import sys

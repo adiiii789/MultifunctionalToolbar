@@ -1,3 +1,8 @@
+# --- Plugin-Parameter (neues System) ---
+NAME = "Timer"
+ICON = "⏱️"
+# ----------------------------------------
+
 # scripts/pro_timer_html.py
 from PyQt5.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QApplication
 from PyQt5.QtWebEngineWidgets import QWebEngineView

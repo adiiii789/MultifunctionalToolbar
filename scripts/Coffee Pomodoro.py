@@ -1,3 +1,8 @@
+# --- Plugin-Parameter (neues System) ---
+NAME = "Coffee Pomodoro"
+ICON = "☕"
+# ----------------------------------------
+
 from PyQt5.QtWidgets import QMainWindow, QVBoxLayout, QWidget
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 

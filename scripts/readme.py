@@ -1,3 +1,8 @@
+# --- Plugin-Parameter (neues System) ---
+NAME = "README Manager"
+ICON = "📖"
+# ----------------------------------------
+
 # scripts/readme_manager.py
 import os
 import sys

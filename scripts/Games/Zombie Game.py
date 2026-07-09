@@ -1,3 +1,8 @@
+# --- Plugin-Parameter (neues System) ---
+NAME = "Zombie Game"
+ICON = "🧟"
+# ----------------------------------------
+
 # scripts/pro_sci_calculator_html.py
 from PyQt5.QtWidgets import QMainWindow, QVBoxLayout, QWidget
 from PyQt5.QtWebEngineWidgets import QWebEngineView

@@ -1,5 +1,13 @@
+# --- Plugin-Parameter (neues System) ---
+HTML_BUTTON = True  # ersetzt den alten "[html]"-Dateiprefix
+NAME = "Dual UI"
+MEDIA_BRIDGE = True
+# ----------------------------------------
+
 # [HTML] dual_ui.py
 # Liefert je nach mode ("popup" | "window") eine Inline-HTML-UI als String.
+# NEU: Rechts im Button wird das Album-Cover der laufenden Medien angezeigt
+# (Windows 10/11, via media.requestMediaInfo() — benötigt "pip install winsdk").
 
 def get_inline_html(mode: str) -> str:
     mode = (mode or "window").lower()
@@ -96,6 +104,17 @@ def get_inline_html(mode: str) -> str:
     fill: currentColor;
     stroke: currentColor;
   }
+  /* Album-Cover der laufenden Medien (links im Button) */
+  .cover {
+    height: calc(100% - 6px);
+    aspect-ratio: 1 / 1;
+    align-self: center;
+    flex: 0 0 auto;
+    border-radius: 9px;
+    object-fit: cover;
+    margin-right: 8px;
+    display: none; /* wird per JS eingeblendet, sobald ein Cover da ist */
+  }
 </style>
 """
     theme_js = """
@@ -134,9 +153,47 @@ def get_inline_html(mode: str) -> str:
 })();
 </script>
 """
+    cover_js = """
+<script>
+(function() {
+  function connectCover(attempt = 0) {
+    if (!window.media || typeof window.media.requestMediaInfo !== 'function') {
+      if (attempt < 40) {
+        return void setTimeout(() => connectCover(attempt + 1), 150);
+      }
+      return; // Bridge/Feature nicht verfügbar → Cover bleibt ausgeblendet
+    }
+
+    const img = document.getElementById('cover');
+    if (!img) return;
+
+    if (window.media.mediaInfoChanged && typeof window.media.mediaInfoChanged.connect === 'function') {
+      window.media.mediaInfoChanged.connect(function(raw) {
+        try {
+          const info = JSON.parse(raw);
+          if (info && info.available && info.thumbnail) {
+            if (img.src !== info.thumbnail) img.src = info.thumbnail;
+            img.title = [info.title, info.artist].filter(Boolean).join(' — ');
+            img.style.display = 'block';
+          } else {
+            img.style.display = 'none';
+          }
+        } catch (e) { /* ignorieren */ }
+      });
+    }
+
+    window.media.requestMediaInfo();
+    setInterval(() => window.media.requestMediaInfo(), 3000);
+  }
+
+  window.addEventListener('load', () => connectCover());
+})();
+</script>
+"""
     if mode == "popup":
         return common_css + r'''
 <div class="row">
+  <img id="cover" class="cover" alt="" />
   <button class="btn" title="Vorheriger" onclick="window.media?.prev()">
     <svg viewBox="0 0 32 32">
       <polygon points="26,6 12,16 26,26" fill="currentColor"/>
@@ -155,10 +212,11 @@ def get_inline_html(mode: str) -> str:
     </svg>
   </button>
 </div>
-''' + theme_js
+''' + theme_js + cover_js
     else:
         return common_css + r'''
 <div class="row">
+  <img id="cover" class="cover" alt="" />
   <div class="left-buttons">
     <button class="btn" title="Vorheriger" onclick="window.media?.prev()">
       <svg viewBox="0 0 32 32">
@@ -204,5 +262,4 @@ def get_inline_html(mode: str) -> str:
     </button>
   </div>
 </div>
-''' + theme_js
-
+''' + theme_js + cover_js

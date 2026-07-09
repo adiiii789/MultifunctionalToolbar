@@ -1,3 +1,8 @@
+# --- Plugin-Parameter (neues System) ---
+NAME = "Kalender"
+ICON = "📅"
+# ----------------------------------------
+
 # scripts/pro_calendar_html.py
 import os
 import json

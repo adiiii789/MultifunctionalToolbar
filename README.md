@@ -1,158 +1,72 @@
-# Multifunctional Toolbar (Tray Launcher)
+# Multifunctional Toolbar v2 (Traylauncher)
 
-Ein leichter **PyQt5**-Launcher mit Systemtray-Icon, Popup-Panel und Hauptfenster. Er listet ausführbare **Plugins** (Python & HTML) aus einem frei wählbaren Ordner, bietet **Inline-HTML-Previews**, eine **Suchleiste**, sowie eine WebEngine-**Toolbar** mit **HTML-Theme-Schalter** (🌙/☀️) und sicherem **Zurück**-Handling.
+Sauberer Nachbau des Tray-Launchers. `Traylauncher.py` liegt im Root und ist die Mainklasse. Optik, Größen und Verhalten des Originals sind vollständig erhalten (Popup 15 % × 50 % des Bildschirms, Hauptfenster 40 % × 40 %, Theme-Toggle mit Sonne/Mond-Switch, Tabs, Suche, identische Farben und Stylesheets).
 
----
+## Start
 
-## Highlights
-
-- **Systemtray-App** (Windows-optimiert)  
-  - Linksklick: Hauptfenster öffnen/aktivieren  
-  - Rechtsklick: kompaktes **Popup** neben dem Cursor
-- **Plugins aus Ordner** `./scripts`  
-  - `.py` → als Qt-Widget (klassische Plugins)  
-  - `.html` → im Container oder inline (siehe `[html]`-Prefix)
-- **Inline-HTML-Preview** via `QWebEngineView`  
-  - Dateien mit Prefix **`[html]`** erscheinen als kompakte Cards in der Liste  
-  - Optionaler **WebChannel** (z. B. Mediensteuerung)
-- **Toolbar (HTML, WebEngine)**  
-  - **← Explorer** (Zurück ins Listing)  
-  - **🌙/☀️ Theme-Toggle** (echtes HTML-Element mit CSS)
-- **Suche** (rechts oben im Hauptfenster)  
-  - Filtert Einträge im aktuellen Ordner (case-insensitive)
-- **Stabil & Crash-resistent**  
-  - **Sicheres Zurück** (räumt WebEngine-Seiten vor dem Wechsel auf)  
-  - Entkoppelter Listen-Zurück-Button (`QTimer.singleShot`)
-
----
-
-## Anforderungen
-
-- **Python 3.8+**
-- **PyQt5** & **PyQtWebEngine**
-  
 ```bash
 pip install PyQt5 PyQtWebEngine
-```
-
-> Tipp: Unter Windows empfiehlt sich eine venv, um Konflikte zu vermeiden.
-
----
-
-## Schnellstart
-
-1. Repository/Projekt lokal haben.
-2. Ordner `scripts/` existiert (wird beim ersten Start befüllt).
-3. Starten:
-
-```bash
+pip install winsdk   # optional: Album-Cover der laufenden Medien (Win 10/11)
 python tray_launcher.py
 ```
 
-Nach dem Start liegt ein Tray-Icon im Infobereich.  
-- **Linksklick:** Hauptfenster  
-- **Rechtsklick:** Popup mit Explorer
+Inline-HTML-Cards können über die Media-Bridge zusätzlich `media.requestMediaInfo()` aufrufen und erhalten über das Signal `media.mediaInfoChanged` ein JSON mit Titel, Interpret, Wiedergabestatus und Album-Cover (Base64) der gerade laufenden Medien — genutzt z. B. von `Dual UI.py`, das das Cover rechts im Button anzeigt. Ohne `winsdk` oder ohne laufende Medien bleibt das Cover einfach ausgeblendet.
 
----
+Linksklick auf das Tray-Icon: Hauptfenster. Rechtsklick: Popup.
 
-## Ordnerstruktur & Plugins
+## Neu: Plugin-Parameter in der Plugin-Datei
 
+Was ein Plugin "kann", wird jetzt per Konstanten oben in der Datei gesteuert. Die Werte werden per AST gelesen — die Datei wird dafür nicht ausgeführt.
+
+| Parameter | Typ | Wirkung |
+|---|---|---|
+| `HTML_BUTTON = True` | bool | Der Listen-Button wird als HTML-Card gerendert |
+| `BUTTON_HTML = "<div>…</div>"` | str | Das HTML für den Button (nur mit `HTML_BUTTON = True`) |
+| `BUTTON_HTML_FILE = "card.html"` | str | HTML-Datei (relativ zur Plugin-Datei) für den Button |
+| `BUTTON_HEIGHT = 80` | int | Höhe des Buttons/der Card in px (Standard 60 bzw. Original-Formel) |
+| `NAME = "Musik"` | str | Anzeigename statt Dateiname |
+| `ICON = "🎵"` | str | Emoji/Text vor dem Namen — oder eine **Bilddatei** (`ICON = "icon.png"`, relativ zur Plugin-Datei oder absolut; .png/.jpg/.svg/.ico/.gif/.webp/.bmp). Wird links im Listen-Button und als Tab-Icon angezeigt |
+| `OPACITY = 0.85` | float | Transparenz des Buttons, 0–1 (Zusatzfeature) |
+| `RUN_AS = "widget"` | str | `"widget"` (Standard, öffnet im Tab), `"process"` (eigener Python-Prozess), `"browser"` (HTML im Standardbrowser) |
+| `ALLOW_POPUP = False` | bool | Eintrag im Rechtsklick-Popup ausblenden |
+| `ALLOW_WINDOW = False` | bool | Eintrag im Hauptfenster ausblenden |
+| `MEDIA_BRIDGE = False` | bool | WebChannel-Mediensteuerung (`media.playPause()` usw.) deaktivieren |
+| `PINNED = True` | bool/int | Plugin oben in der Liste anpinnen (vor allen anderen Einträgen). Zahl statt `True` legt die Reihenfolge mehrerer angepinnter Plugins fest (kleiner = weiter oben) |
+
+Für `.html`-Dateien gelten dieselben Parameter als führende HTML-Kommentare:
+
+```html
+<!-- html_button: true -->
+<!-- button_height: 80 -->
 ```
-project/
-├── tray_launcher.py
-└── scripts/
-    ├── timer_plugin.py       # Beispiel: Python-Plugin (Qt-Widget)
-    └── html_timer/
-        └── index.html        # Beispiel: HTML-Demo
-```
 
-- **Python-Plugins**: Datei exportiert **`PluginWidget`** (Qt-Widget).  
-  Optionaler Konstruktor-Parameter `mode`: `"Window"` oder `"Popup"`.
+## Transparenz (Zusatzfeature)
 
-```python
-class PluginWidget(QWidget):
-    def __init__(self, mode="Window"):
-        super().__init__()
-        # ... UI ...
-```
+Global oben in `Traylauncher.py`: `POPUP_OPACITY` (Standard 0.97) und `MAIN_WINDOW_OPACITY` (Standard 1.0). Pro Plugin über `OPACITY`.
 
-- **HTML-Plugins**: 
-  - Normale `.html`-Dateien werden in einem Container angezeigt.  
-  - Dateien mit Prefix **`[html]`** (z. B. `[html]status.html`) erscheinen **inline**, kompakt und ohne Scrollen.
-  - Für fortgeschrittene Szenarien kann eine `.py`-Datei HTML liefern, wenn sie eine Funktion  
-    **`get_inline_html(mode: str) -> str`** bereitstellt.
+## HTML-Explorer (anpassbare Oberfläche)
 
----
+Die Plugin-Liste (Ordner, Buttons, Inline-Cards) wird als HTML gerendert — Python ist nur noch Backend und liefert den Zustand als JSON über eine QWebChannel-Bridge (`explorer`-Objekt: `getState`, `open`, `enterDir`, `goBack`, `openLink`; dazu `media` für die Cards). Das komplette Aussehen liegt in **`ui/explorer.html`** (wird beim ersten Start angelegt) und kann dort frei angepasst werden — Farben, Abstände, Animationen, Layout. Die mitgelieferte Standard-UI repliziert den bisherigen Qt-Explorer exakt (gleiche Farben, Höhen, Hover-Effekte, Scrollbar).
 
-## Bedienung
+Inline-Cards laufen als iframes innerhalb des Explorers; `window.media`, `window.toolbarMode` und **`openPlugin(pfad)`** stehen dort zur Verfügung — damit kann ein Button in der Card jedes Plugin öffnen (`openPlugin('Timer.py')`, relativ zum Ordner der Card, oder absolut; `openPlugin()` ohne Argument öffnet die eigene Datei). Linkklicks (`<a href>`) öffnen wie bisher als Tab, `get_inline_html(mode)` und alle Plugin-Parameter funktionieren unverändert. Über `HTML_EXPLORER = False` oben in `Traylauncher.py` (oder ohne PyQtWebEngine) wird automatisch der klassische Qt-Explorer verwendet.
 
-### Explorer
-- Navigiert den **`scripts/`**-Baum.
-- **Zurück**: 
-  - **Toolbar-Button „← Explorer“** (wenn ein Plugin/Link offen ist)
-  - **Listen-Button „← Zurück“** (im Ordnerlisting)
+## Plugins als geschlossene Systeme
 
-### Suche
-- Eingabe oben rechts im Hauptfenster → *Enter* → Filtert Einträge im aktuellen Ordner.
+Ein Plugin lebt vollständig in seiner Datei — der Launcher lädt es nur und routet:
 
-### Theme
-- **HTML-Button** in der Toolbar (🌙/☀️).  
-  - Wechselt zwischen **Dark** und **Light** Theme.  
-  - Einstellungen werden sofort auf UI und Toolbar gespiegelt.
+- **UI**: `BUTTON_HTML` / `get_inline_html(mode)` (Card) bzw. `PluginWidget` (Fenster) — in der Plugin-Datei.
+- **Backend-Logik**: `handle_call(method, args)` in der Plugin-Datei. Die Card ruft es per `pluginCall('methode', {…}, callback)` auf; der Launcher transportiert nur JSON, führt aber keine Plugin-Logik aus. Das Modul wird gecacht, Zustand (z. B. Zählerstände) bleibt zwischen Aufrufen erhalten. Beispiel: `scripts/Zähler.py`.
+- **Systemweite Dienste** liegen getrennt in **`services.py`** (Root): die Media-Bridge (`media.*` — Windows-Medientasten + Album-Cover, per `MEDIA_BRIDGE = False` abwählbar) und die native Titelleisten-Färbung. Der Launcher importiert sie nur und registriert sie über `create_services()` auf dem WebChannel — neue Dienste dort ergänzen, sie stehen dann automatisch allen Cards zur Verfügung. Fehlt `services.py`, läuft die Toolbar mit No-op-Stubs weiter.
+- **Launcher selbst**: nur Management — Listing, Tabs, Watcher, Parameter-Lesen (AST), Routing (`openPlugin`, `pluginCall`), Theme-Verteilung (`toolbar_theme`).
 
-### Links in Inline-HTML
-- Klicks werden abgefangen:
-  - **Lokale Dateien** → als Plugin geöffnet  
-  - **Web-URLs** → im eingebetteten Viewer (eigene Seite in der App)
+## Native Windows-Titelleiste (Zusatzfeature)
 
----
+Die Titelleiste des Hauptfensters folgt dem Light/Dark-Toggle — über die Windows-DWM-API, ohne die Leiste zu ersetzen. Alle Fenster-Features (Snap-Layouts, an die Seite andocken, Doppelklick-Maximieren) bleiben erhalten. Dark-Mode funktioniert ab Windows 10 1809; die konkreten Farben (`TITLEBAR_COLOR_DARK/LIGHT`, `TITLEBAR_TEXT_DARK/LIGHT` oben in `Traylauncher.py`) greifen unter Windows 11 und werden unter Windows 10 still ignoriert.
 
-## Stabilität & Sicherheit
+## Abwärtskompatibilität
 
-- **Safe Back**: Beim Zurückwechsel werden aktive `QWebEngineView` zuerst auf `about:blank` umgeladen und die Seite **asynchron entfernt** → verhindert **Access Violations** (0xC0000005).
-- **Entkoppelter Listen-Zurück**: `QTimer.singleShot(0, ...)` vermeidet Rennen zwischen Render & Rebuild.
-- **Teardown**: WebEngine-Toolbars werden beim Beenden versteckt und `deleteLater()` aufgerufen.
+Der Dateiname-Prefix `[html]` und die Funktion `get_inline_html(mode)` funktionieren unverändert; ebenso `class PluginWidget(mode=...)` für klassische Widget-Plugins. Bestehende Plugins laufen ohne Änderung.
 
----
+## Beispiele in `scripts/`
 
-## Erweiterungstipps
-
-- **Eigene Python-Plugins**:  
-  - Lege `.py` in `scripts/` ab, exportiere `PluginWidget`.  
-  - Nutze den `mode`-Parameter für unterschiedliche Layouts im Popup vs. Hauptfenster.
-
-- **Eigene Inline-HTML-Cards**:  
-  - Benenne Datei mit Prefix `[html]`.  
-  - Vermeide Scrollbars; nutze responsive, kompakte Layouts.
-
-- **WebChannel**:  
-  - In Inline-HTML ist `window.media` (Beispiel: Medien-Keys) verfügbar.  
-  - Eigene Bridges lassen sich analog registrieren.
-
----
-
-## Troubleshooting
-
-- **„PyQtWebEngine nicht verfügbar“**  
-  → `pip install PyQtWebEngine`  
-  → Falls Headless/Server: WebEngine benötigt GUI-Stack.
-
-- **Crash beim Zurück (ältere Builds)**  
-  → Stelle sicher, dass die „Safe Back“-Änderungen enthalten sind (WebViews → `about:blank`, `deleteLater()`).
-
-- **Plugin lädt nicht**  
-  - Python: Prüfe, ob `PluginWidget` existiert und instanziierbar ist.  
-  - HTML: Dateipfade & Berechtigungen prüfen.
-
----
-
-## Lizenz
-
-Wähle eine Lizenz deiner Wahl und ergänze sie hier (z. B. MIT).
-
----
-
-## Credits
-
-- PyQt5, PyQtWebEngine  
-- Design: kompakte Launcher-Erfahrung mit HTML-Toolbar und systemfreundlichem Verhalten.
+`Plugin Editor.py` (🛠️ Editor zum Erstellen neuer Plugins — Formular, Code-Generator und Live-Vorschau für Button/Window/Popup inkl. Dark/Light; speichert direkt in `scripts/`), `Musik Steuerung.py` (HTML-Button per `BUTTON_HTML` + Media-Bridge), `Timer.py` (klassisches Widget-Plugin), `Notizen Transparent.py` (transparenter Button, nur im Hauptfenster), `[HTML] Uhr Kompat.py` (altes `[html]`-Prefix-Verhalten).
