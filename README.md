@@ -7,7 +7,7 @@ Sauberer Nachbau des Tray-Launchers. `Traylauncher.py` liegt im Root und ist die
 ```bash
 pip install PyQt5 PyQtWebEngine
 pip install winsdk   # optional: Album-Cover der laufenden Medien (Win 10/11)
-python tray_launcher.py
+python Traylauncher.py
 ```
 
 Inline-HTML-Cards können über die Media-Bridge zusätzlich `media.requestMediaInfo()` aufrufen und erhalten über das Signal `media.mediaInfoChanged` ein JSON mit Titel, Interpret, Wiedergabestatus und Album-Cover (Base64) der gerade laufenden Medien — genutzt z. B. von `Dual UI.py`, das das Cover rechts im Button anzeigt. Ohne `winsdk` oder ohne laufende Medien bleibt das Cover einfach ausgeblendet.
@@ -49,6 +49,29 @@ Global oben in `Traylauncher.py`: `POPUP_OPACITY` (Standard 0.97) und `MAIN_WIND
 Die Plugin-Liste (Ordner, Buttons, Inline-Cards) wird als HTML gerendert — Python ist nur noch Backend und liefert den Zustand als JSON über eine QWebChannel-Bridge (`explorer`-Objekt: `getState`, `open`, `enterDir`, `goBack`, `openLink`; dazu `media` für die Cards). Das komplette Aussehen liegt in **`ui/explorer.html`** (wird beim ersten Start angelegt) und kann dort frei angepasst werden — Farben, Abstände, Animationen, Layout. Die mitgelieferte Standard-UI repliziert den bisherigen Qt-Explorer exakt (gleiche Farben, Höhen, Hover-Effekte, Scrollbar).
 
 Inline-Cards laufen als iframes innerhalb des Explorers; `window.media`, `window.toolbarMode` und **`openPlugin(pfad)`** stehen dort zur Verfügung — damit kann ein Button in der Card jedes Plugin öffnen (`openPlugin('Timer.py')`, relativ zum Ordner der Card, oder absolut; `openPlugin()` ohne Argument öffnet die eigene Datei). Linkklicks (`<a href>`) öffnen wie bisher als Tab, `get_inline_html(mode)` und alle Plugin-Parameter funktionieren unverändert. Über `HTML_EXPLORER = False` oben in `Traylauncher.py` (oder ohne PyQtWebEngine) wird automatisch der klassische Qt-Explorer verwendet.
+
+## Kanonische Plugin-Struktur
+
+Plugins sollten möglichst diesem Aufbau folgen — der Plugin-Editor erzeugt ihn, erkennt ihn beim Laden und trägt die Teile automatisch in Formular und Vorschau (Button/Window/Popup) ein:
+
+```python
+# --- Plugin-Parameter ---
+NAME = "Mein Plugin"
+HTML_BUTTON = True
+# ------------------------
+
+BUTTON_HTML = """…Card-HTML…"""          # optional: Button in der Liste
+
+class PluginWidget(QMainWindow):
+    def __init__(self, mode="Window"):
+        ...
+        if mode == "Window":
+            self.html = r"""…Fenster-HTML…"""
+        else:  # Popup
+            self.html = r"""…Popup-HTML…"""
+```
+
+Abwandlungen (unbedingtes `self._base_html = …`, Modul-Variablen wie `POPUP_HTML_CONTENT`, `WINDOW_HTML`-Konstanten, `get_inline_html`) werden vom Editor ebenfalls erkannt; die Theme-Wrapper-Plugins (Kalender, To-Do, …) behalten bewusst ihre eigene Struktur, weil sie ihr HTML zur Laufzeit dynamisch aufbauen.
 
 ## Plugins als geschlossene Systeme
 
