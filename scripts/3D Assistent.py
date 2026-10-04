@@ -1,8 +1,16 @@
 # --- Plugin-Parameter (neues System) ---
-NAME = "3D Assistent"
-ICON = "🧍"
-POPUP_WIDTH = 0.45   # Popup beim Öffnen auf 45 % der Bildschirmbreite verbreitern
-POPUP_HEIGHT = 0.6   # ... und 60 % der Höhe (Ecke am Tray bleibt stehen)
+NAME = "Assistent"
+ICON = ""
+PINNED = 1
+
+HTML_BUTTON = True
+BUTTON_HTML = """
+<div style="display:flex;height:100%;gap:10px;
+            font-family:system-ui;color:inherit;">
+  <button onclick="openPlugin()" style="padding:4px 12px;border-radius:8px;border:none;cursor:pointer;">Assistant</button>
+</div>
+"""
+
 # ----------------------------------------
 
 # 3D-Assistent (Three.js + GLB-Modell mit Lippen-Sync und Blinzeln).
