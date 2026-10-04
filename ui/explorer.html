@@ -24,6 +24,21 @@
     --scroll-track: #d6d6d6;  --scroll-handle: #999;
   }
 
+  /* ==== Glas-Modus (Einstellungen → Transparent, nur Dark) =============== */
+  html[data-glass="true"] {
+    --text: #f1f1f1;
+    --folder-bg: rgba(255,255,255,0.08);  --folder-hover: rgba(255,255,255,0.14);
+    --file-bg:   rgba(255,255,255,0.08);  --file-hover:   rgba(255,255,255,0.14);
+    --card-bg:   rgba(18,18,22,0.55);     --card-hover:   rgba(255,255,255,0.18);
+    --back-bg:   rgba(255,255,255,0.08);  --back-hover:   rgba(255,255,255,0.14);  --back-text: #f1f1f1;
+    --scroll-track: rgba(0,0,0,0.04);  --scroll-handle: rgba(255,255,255,0.28);
+    --btn-border: 1px solid rgba(255,255,255,0.12);
+    --btn-radius: 10px;
+    --card-border: 1px solid rgba(255,255,255,0.08);
+  }
+  html[data-glass="true"] .folder,
+  html[data-glass="true"] .back { font-weight: 600; }
+
   html, body { margin: 0; padding: 0; background: transparent; }
   body { font: 12px "Segoe UI", system-ui, sans-serif; color: var(--text); }
 
@@ -37,6 +52,8 @@
     display: flex; align-items: center; justify-content: center;
     width: 100%; border: none; cursor: pointer;
     color: var(--text); font: inherit; padding: 0;
+    border: var(--btn-border, none); border-radius: var(--btn-radius, 0);
+    box-sizing: border-box;
   }
   .folder { background: var(--folder-bg); }
   .folder:hover { background: var(--folder-hover); }
@@ -47,7 +64,7 @@
   .back:hover { background: var(--back-hover); }
 
   .card {
-    background: var(--card-bg); border-radius: 8px;
+    background: var(--card-bg); border-radius: 8px; border: var(--card-border, none);
     padding-left: 8px; padding-right: 8px; box-sizing: border-box;
   }
   .card:hover { background: var(--card-hover); }
@@ -64,6 +81,7 @@
     if (!state) return;
     document.documentElement.setAttribute('data-theme', state.theme);
     document.documentElement.setAttribute('data-compact', state.compact ? 'true' : 'false');
+    document.documentElement.setAttribute('data-glass', state.glass ? 'true' : 'false');
     const list = document.getElementById('list');
     list.innerHTML = '';
 
