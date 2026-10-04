@@ -20,6 +20,8 @@ Die Werte werden per AST gelesen, die Datei wird dafuer NICHT ausgefuehrt::
     ALLOW_WINDOW  = True                         # im Hauptfenster anzeigen
     MEDIA_BRIDGE  = True                         # WebChannel-Mediensteuerung
     PINNED        = 1                            # True oder Zahl: oben anpinnen
+    POPUP_WIDTH   = 0.45                         # Popup-Breite beim Öffnen (Anteil Bildschirm oder px)
+    POPUP_HEIGHT  = 0.6                          # Popup-Höhe beim Öffnen (Anteil Bildschirm oder px)
 
 In .html-Dateien gehen dieselben Parameter als fuehrende Kommentare:
 ``<!-- html_button: true -->``. Der Dateiname-Prefix ``[html]`` und
@@ -333,6 +335,7 @@ def apply_titlebar_theme(widget: QWidget) -> None:
 PLUGIN_META_KEYS = frozenset({
     "HTML_BUTTON", "BUTTON_HTML", "BUTTON_HTML_FILE", "BUTTON_HEIGHT", "NAME", "ICON",
     "OPACITY", "RUN_AS", "ALLOW_POPUP", "ALLOW_WINDOW", "MEDIA_BRIDGE", "PINNED",
+    "POPUP_WIDTH", "POPUP_HEIGHT",
 })
 _HTML_META_COMMENT = re.compile(r"<!--\s*([A-Za-z_]+)\s*[:=]\s*(.+?)\s*-->")
 
@@ -356,6 +359,11 @@ def _flag(value, default: bool) -> bool:
 
 def _opacity(value) -> float | None:
     return float(value) if _is_number(value) and 0.0 < value < 1.0 else None
+
+
+def _screen_size(value) -> float | None:
+    """POPUP_WIDTH/-HEIGHT: Anteil (0 < x <= 1) oder Pixel (> 1)."""
+    return float(value) if _is_number(value) and value > 0 else None
 
 
 def _pin_rank(value) -> int | None:
@@ -422,6 +430,8 @@ class PluginMeta:
     allow_window: bool = True
     media_bridge: bool = True
     pin_rank: int | None = None
+    popup_width: float | None = None    # <= 1: Anteil der Bildschirmbreite, sonst Pixel
+    popup_height: float | None = None
 
     @classmethod
     def from_file(cls, path: str) -> PluginMeta:
@@ -449,6 +459,8 @@ class PluginMeta:
             allow_window=_flag(raw.get("ALLOW_WINDOW"), True),
             media_bridge=_flag(raw.get("MEDIA_BRIDGE"), True),
             pin_rank=_pin_rank(raw.get("PINNED")),
+            popup_width=_screen_size(raw.get("POPUP_WIDTH")),
+            popup_height=_screen_size(raw.get("POPUP_HEIGHT")),
         )
 
     @property
@@ -620,12 +632,15 @@ POPUP_TOOLBAR_HTML = Template("""<!DOCTYPE html>
 <body>
 <div class="toolbar-container">
     <button id="explorerBtn" class="toolbar-btn $mode">&larr; Explorer</button>
+    <button id="sizeBtn" class="toolbar-btn $mode" style="display: $size_display;"
+            title="Zwischen Plugin-Größe und normaler Popup-Größe wechseln">$size_label</button>
 </div>
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script>
     new QWebChannel(qt.webChannelTransport, function (channel) {
         var bridge = channel.objects.bridge;
         document.getElementById("explorerBtn").onclick = function () { bridge.goBackToExplorer(); };
+        document.getElementById("sizeBtn").onclick = function () { bridge.togglePopupSize(); };
     });
 </script>
 </body></html>
@@ -1542,6 +1557,11 @@ class ThemeBridge(QObject):
             self.main_window.toggle_theme()
 
     @pyqtSlot()
+    def togglePopupSize(self) -> None:  # noqa: N802 (JS-API)
+        if self.popup is not None:
+            self.popup.toggle_plugin_size()
+
+    @pyqtSlot()
     def goBackToExplorer(self) -> None:  # noqa: N802 (JS-API)
         if self.popup is not None and self.popup.isVisible():
             self.popup.show_explorer()
@@ -1633,6 +1653,8 @@ class PopupWindow(ExplorerMixin, QWidget):
 
         self.bridge = ThemeBridge(popup=self)
         self.channel = None
+        self.plugin_size: tuple[float | None, float | None] | None = None   # Größe des offenen Plugins
+        self.plugin_size_active = False
         if WEBENGINE_AVAILABLE:
             self.toolbar = make_web_view(self)
             self.toolbar.setFixedHeight(40)
@@ -1663,6 +1685,10 @@ class PopupWindow(ExplorerMixin, QWidget):
         self.animation = QPropertyAnimation(self, b"geometry")
         self.animation.setDuration(self.ANIMATION_MS)
         self.animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.resize_animation = QPropertyAnimation(self, b"geometry")
+        self.resize_animation.setDuration(260)
+        self.resize_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.resize_animation.finished.connect(lambda: self.setFixedSize(self.width_size, self.height_size))
 
     @staticmethod
     def _target_size() -> tuple[int, int]:
@@ -1682,13 +1708,23 @@ class PopupWindow(ExplorerMixin, QWidget):
     def build_toolbar(self) -> None:
         if WEBENGINE_AVAILABLE:
             self.toolbar.setHtml(POPUP_TOOLBAR_HTML.substitute(
-                button_css=TOOLBAR_BUTTON_CSS, mode=SETTINGS.effective_theme))
+                button_css=TOOLBAR_BUTTON_CSS, mode=SETTINGS.effective_theme,
+                size_display="inline-block" if self.plugin_size else "none",
+                size_label="⇤ Schmal" if self.plugin_size_active else "⇔ Breit"))
 
-    def show_plugin_widget(self, widget: QWidget, title: str = "") -> None:
+    def show_plugin_widget(self, widget: QWidget, title: str = "", meta: PluginMeta | None = None) -> None:
+        # Plugins mit POPUP_WIDTH/-HEIGHT öffnen breiter; der Größen-Knopf schaltet um
+        if meta is not None and (meta.popup_width or meta.popup_height):
+            self.plugin_size = (meta.popup_width, meta.popup_height)
+            self.plugin_size_active = False  # schmal starten, "⇔ Breit" vergrößert
+        else:
+            self.plugin_size = None
+            self.plugin_size_active = False
+        self.build_toolbar()
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(8, 8, 8, 8)
-        header = QLabel(f"🧩 Plugin: {title}")
+        header = QLabel(f"Plugin: {title}")
         header.setStyleSheet("font-weight:600;font-size:15px;margin-bottom:6px;")
         layout.addWidget(header)
         layout.addWidget(widget)
@@ -1700,6 +1736,45 @@ class PopupWindow(ExplorerMixin, QWidget):
         self._close_active_page()
         self.pages.setCurrentWidget(self.explorer_root)
         self.toolbar.setVisible(False)
+        self.plugin_size = None
+        self.plugin_size_active = False
+        self.resize_keeping_corner(None, None)    # zurück auf Standardgröße
+
+    def toggle_plugin_size(self) -> None:
+        """Größen-Knopf: zwischen Plugin-Größe und normaler Popup-Größe wechseln."""
+        if not self.plugin_size:
+            return
+        self.plugin_size_active = not self.plugin_size_active
+        if self.plugin_size_active:
+            self.resize_keeping_corner(*self.plugin_size)
+        else:
+            self.resize_keeping_corner(None, None)
+        self.build_toolbar()
+
+    def resize_keeping_corner(self, width: float | None, height: float | None) -> None:
+        """Popup vergrößern/verkleinern; die untere rechte Ecke (am Tray) bleibt stehen.
+
+        width/height: <= 1 = Anteil des Bildschirms, > 1 = Pixel, None = Standardgröße.
+        """
+        screen = QGuiApplication.screenAt(self.geometry().center()) or QGuiApplication.primaryScreen()
+        area = screen.availableGeometry()
+        default_w, default_h = self._target_size()
+        w = min(_size_to_px(width, area.width(), default_w), area.width())
+        h = min(_size_to_px(height, area.height(), default_h), area.height())
+        old = self.geometry()
+        right, bottom = old.x() + old.width(), old.y() + old.height()
+        x = max(area.left(), right - w)
+        y = max(area.top(), bottom - h)
+        if (w, h) == (old.width(), old.height()):
+            return
+        self.width_size, self.height_size = w, h
+        # Für die Animation die feste Größe kurz lösen
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(16777215, 16777215)
+        self.resize_animation.stop()
+        self.resize_animation.setStartValue(old)
+        self.resize_animation.setEndValue(QRect(x, y, w, h))
+        self.resize_animation.start()
 
     def _close_active_page(self) -> None:
         page = self.pages.currentWidget()
@@ -1710,9 +1785,20 @@ class PopupWindow(ExplorerMixin, QWidget):
         page.setParent(None)
         QTimer.singleShot(0, page.deleteLater)
 
+    def _wanted_size(self) -> tuple[int, int]:
+        """Standardgröße oder - falls aktiv - die Größe des offenen Plugins."""
+        default_w, default_h = self._target_size()
+        if not (self.plugin_size and self.plugin_size_active):
+            return default_w, default_h
+        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        area = screen.availableGeometry()
+        width, height = self.plugin_size
+        return (min(_size_to_px(width, area.width(), default_w), area.width()),
+                min(_size_to_px(height, area.height(), default_h), area.height()))
+
     def show_popup(self) -> None:
         self.refresh_styles()
-        self.width_size, self.height_size = self._target_size()
+        self.width_size, self.height_size = self._wanted_size()
         self.setFixedSize(self.width_size, self.height_size)
         cursor = QCursor.pos()
         end = QRect(cursor.x() - self.width_size, cursor.y() - self.height_size,
@@ -1727,6 +1813,13 @@ class PopupWindow(ExplorerMixin, QWidget):
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt-API)
         event.ignore()
         self.hide()
+
+
+def _size_to_px(value: float | None, total: int, default: int) -> int:
+    """Anteil (<= 1) oder Pixelwert (> 1) in Pixel umrechnen; None = default."""
+    if not value:
+        return default
+    return int(value * total) if value <= 1 else int(value)
 
 
 def stop_web_views(widget: QWidget) -> None:
@@ -1970,7 +2063,7 @@ class MainAppWindow(ExplorerMixin, QMainWindow):
         if widget is None:
             return
         if in_popup:
-            source_widget.show_plugin_widget(widget, meta.tab_title(path))
+            source_widget.show_plugin_widget(widget, meta.tab_title(path), meta)
         else:
             self._add_plugin_tab(widget, path, meta)
 

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Board</title>
+<style>
+  /* Inhalt für die Smartboard-Fläche. Hintergrund bleibt transparent,
+     damit die weiße Tafel aus dem Hintergrundbild durchscheint. */
+  html, body { margin: 0; height: 100%; background: transparent; }
+  body {
+    font-family: "Segoe UI", system-ui, sans-serif; color: #1d2a33;
+    padding: 5% 6%; box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 3vh;
+  }
+  h1 { margin: 0; font-size: 4.2vh; color: #0f8f9e; }
+  p  { margin: 0; font-size: 2.3vh; line-height: 1.5; max-width: 60ch; }
+  ul { margin: 0; padding-left: 1.2em; font-size: 2.3vh; line-height: 1.7; }
+  code { background: #e6f4f6; padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.95em; }
+</style>
+</head>
+<body>
+  <h1>Willkommen 👋</h1>
+  <p>Diese Fläche ist das Smartboard. Hier kann beliebiger Inhalt angezeigt werden:</p>
+  <ul>
+    <li>eine HTML-Datei aus <code>_a3d/board/</code></li>
+    <li>eine Webseite per URL</li>
+    <li>direkt HTML-Text, z. B. aus Python</li>
+  </ul>
+  <p>Aufruf: <code>showOnBoard("board/folie2.html")</code> oder <code>showOnBoard("&lt;h1&gt;Hallo&lt;/h1&gt;")</code></p>
+</body>
+</html>

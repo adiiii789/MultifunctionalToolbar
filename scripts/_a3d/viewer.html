@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>3D Assistent</title>
+  <link rel="stylesheet" href="css/viewer.css" />
+</head>
+<body>
+<!-- Bühne: Hintergrundbild + Smartboard-Fläche (liegt HINTER der 3D-Figur) -->
+<img id="stage-narrow-bg" alt="">   <!-- Hintergrund für das schmale Layout -->
+<div id="stage">
+  <img id="stage-bg" alt="">
+  <div id="board"><iframe id="board-frame" title="Board"></iframe></div>
+</div>
+
+<div id="hint">Lade 3D-Modell…</div>
+<button id="panel-toggle" title="Steuerung einblenden">☰</button>
+<div id="anim-panel">
+  <h4>💡 Helligkeit</h4>
+  <input type="range" id="brightness" min="0.2" max="2.5" step="0.05" value="1" style="width:100%; margin-bottom:1vh;">
+  <h4 id="anim-heading">🎬 Animationen</h4>
+</div>
+<div id="chat-container">
+  <div id="chat-messages"></div>
+  <input type="text" id="chat-input" placeholder="Schreibe hier..." />
+</div>
+
+<!-- Bibliotheken: three.js r147, lokal mitgeliefert (läuft ohne Internet) -->
+<script src="vendor/three.min.js"></script>
+<script src="vendor/GLTFLoader.js"></script>
+<script src="vendor/OutlineEffect.js"></script>
+
+<!-- Eigene Skripte - Reihenfolge ist wichtig (spätere nutzen frühere) -->
+<script src="js/toon-shader.js"></script>  <!-- Shader, Materialien, Licht -->
+<script src="js/core.js"></script>         <!-- Szene-Variablen, Chat -->
+<script src="js/pose.js"></script>         <!-- Rig + Helfer (dir(), aim(), rotate()) -->
+<script src="js/idle.js"></script>         <!-- natürliches Idle (braucht dir() aus pose.js) -->
+<script src="js/gestures.js"></script>     <!-- Gesten / Moderation -->
+<script src="js/walk.js"></script>         <!-- Laufen -->
+<script src="js/physics.js"></script>      <!-- Haar-/Rock-Physik -->
+<script src="js/face.js"></script>         <!-- Lippensync, Blinzeln -->
+<script src="js/panel.js"></script>        <!-- Bedienpanel -->
+<script src="js/stage.js"></script>        <!-- Hintergrund, Board, Kamera-Ausschnitt, Mausblick -->
+<script src="js/main.js"></script>         <!-- Setup, Laden, Render-Schleife (startet alles) -->
+</body>
+</html>

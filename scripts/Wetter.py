@@ -1,5 +1,5 @@
 # --- Plugin-Parameter (neues System) ---
-HTML_BUTTON = True  # ersetzt den alten "[html]"-Dateiprefix
+HTML_BUTTON = True
 NAME = "Wetter"
 PINNED = True
 # ----------------------------------------
