@@ -2,9 +2,10 @@
 HTML_BUTTON = True  # ersetzt den alten "[html]"-Dateiprefix
 NAME = "Dual UI"
 MEDIA_BRIDGE = True
+PINNED = True
+
 # ----------------------------------------
 
-# [HTML] dual_ui.py
 # Liefert je nach mode ("popup" | "window") eine Inline-HTML-UI als String.
 # NEU: Rechts im Button wird das Album-Cover der laufenden Medien angezeigt
 # (Windows 10/11, via media.requestMediaInfo() — benötigt "pip install winsdk").

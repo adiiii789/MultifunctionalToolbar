@@ -1,6 +1,7 @@
 # --- Plugin-Parameter (neues System) ---
 HTML_BUTTON = True  # ersetzt den alten "[html]"-Dateiprefix
 NAME = "Wetter"
+PINNED = True
 # ----------------------------------------
 
 # [HTML] weather_dual_stuttgart.py
