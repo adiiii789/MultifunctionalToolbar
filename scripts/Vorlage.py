@@ -57,37 +57,35 @@
 
 # --- Plugin-Parameter (neues System) ---
 NAME = "Vorlage Plugin mit Button"
-ICON = ""
+ICON = "" # quasi nachname
 PINNED = False # True oder 1,2,... für prio
-ALLOW_POPUP = False
-ALLOW_WINDOW = False
+ALLOW_POPUP = True # Das es in der Liste angezeigt wird
+ALLOW_WINDOW = True
 HTML_BUTTON = True
-BUTTON_HEIGHT = 234 # delete = auto
-OPACITY = 0.5 # default 1
-
-RUN_AS = "process" # default widget, "browser" possible
+#BUTTON_HEIGHT = 234 # delete = auto
+#OPACITY = 0.5 # default 1
+#RUN_AS = "process" # default widget, "browser" possible
 # ----------------------------------------
 import os
 from PyQt5.QtWidgets import QMainWindow, QVBoxLayout, QWidget
 from PyQt5.QtCore import QUrl
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 
+BUTTON_HTML = """
+<div style="display:flex;align-items:center;justify-content:center;height:100%;gap:10px;
+            font-family:system-ui;color:inherit;">
+  <span>Mein Plugin</span>
+  <button onclick="openPlugin()" style="padding:4px 12px;border-radius:8px;border:none;cursor:pointer;">öffne Plugin</button>
+</div>
+"""
+
 WINDOW_HTML = """
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
   body { font-family: system-ui; margin: 16px; }
 </style></head><body>
-  <h2>✨ Mein Plugin (__MODE__)</h2>
-  <p>Inhalt hier…</p>
+  <h2>Mein Plugin (__MODE__)</h2>
 </body></html>
-"""
-
-BUTTON_HTML = """
-<div style="display:flex;align-items:center;justify-content:center;height:100%;gap:10px;
-            font-family:system-ui;color:inherit;">
-  <span>Mein Plugin</span>
-  <button onclick="media.playPause()" style="padding:4px 12px;border-radius:8px;border:none;cursor:pointer;">⏯</button>
-</div>
 """
 
 POPUP_HTML = """
@@ -95,8 +93,7 @@ POPUP_HTML = """
 <html><head><meta charset="utf-8"><style>
   body { font-family: system-ui; margin: 10px; font-size: 13px; }
 </style></head><body>
-  <h3>✨ Mein Plugin</h3>
-  <p>Kompakte Popup-Ansicht…</p>
+  <h3>Mein Plugin (__MODE__)</h3>
 </body></html>
 """
 # ----------------------------------------
