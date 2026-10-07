@@ -172,3 +172,20 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+
+scripts/_a3d_tts/venv/
+scripts/_a3d_tts/rvc/
+scripts/_a3d_tts/models/
+scripts/_a3d_tts/logs/
+scripts/_a3d_tts/_rvc_tmp/
+scripts/_a3d_tts/_assets_keep/
+scripts/_a3d_tts/test_miku.wav
+scripts/_a3d_tts/__pycache__/
+scripts/_a3d_tts/tts_*
+scripts/_a3d_tts/cache/
+
+scripts/_a3d/tts/*
+
+
+

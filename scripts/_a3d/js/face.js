@@ -101,18 +101,37 @@ const lipsync = {
   weights: { A: 0, I: 0, U: 0, E: 0, O: 0 },   // aktuell angezeigte (geglättete) Werte
 };
 
+/** Text sprechen: mit Stimme (voice.js, lokaler TTS), sonst nur Mundbewegung. */
 function speak(text) {
-  text = String(text || "");
-  lipsync.timeline = textToVisemes(text);
-  lipsync.startTime = performance.now() / 1000;
+  text = String(text || "").trim();
+  if (!text) return;
+  stopSpeaking();
   // Längere Sätze mit den Händen begleiten (Schalter "Gesten beim Sprechen")
   if (talkGestures.enabled && text.length >= talkGestures.minChars && !gesture) {
-    const last = lipsync.timeline[lipsync.timeline.length - 1];
+    const tl = textToVisemes(text), last = tl[tl.length - 1];
     playGesture("🤲 Argumentieren", Math.max(1.5, last.start + last.dur - 0.3));
   }
+  if (typeof speakWithVoice === "function" && speakWithVoice(text)) return;
+  startLipsync(text);
 }
-function stopSpeaking() { lipsync.timeline = []; }
+
+/** Mundbewegung aus dem Text. duration (s): auf die echte Länge des Audios strecken. */
+function startLipsync(text, duration) {
+  const tl = textToVisemes(text);
+  if (duration > 0 && tl.length) {
+    const last = tl[tl.length - 1], k = duration / (last.start + last.dur);
+    for (const seg of tl) { seg.start *= k; seg.dur *= k; }
+  }
+  lipsync.timeline = tl;
+  lipsync.startTime = performance.now() / 1000;
+}
+
+function stopSpeaking() {
+  lipsync.timeline = [];
+  if (typeof stopVoice === "function") stopVoice();
+}
 function isSpeaking() {
+  if (typeof voiceActive === "function" && voiceActive()) return true;
   const tl = lipsync.timeline;
   return tl.length > 0 && performance.now() / 1000 - lipsync.startTime < tl[tl.length - 1].start + tl[tl.length - 1].dur;
 }
@@ -140,15 +159,12 @@ function lipsyncTarget(t) {
   return target;
 }
 
-// --- Morph-Zugriff (Index-Cache pro Mesh, Groß/Kleinschreibung egal) -------
+// --- Morph-Zugriff (Index-Cache pro Mesh) ----------------------------------
+// Erst exakt suchen, dann ohne Groß/Klein - im Modell gibt es "kind" UND "Kind".
 function morphIndex(mesh, name) {
-  if (!mesh.__morphIndexCache) mesh.__morphIndexCache = {};
-  const key = name.toLowerCase();
-  if (!(key in mesh.__morphIndexCache)) {
-    const found = Object.keys(mesh.morphTargetDictionary || {}).find(n => n.toLowerCase() === key);
-    mesh.__morphIndexCache[key] = found !== undefined ? mesh.morphTargetDictionary[found] : -1;
-  }
-  return mesh.__morphIndexCache[key];
+  if (!mesh.__morphExactCache) mesh.__morphExactCache = {};
+  if (!(name in mesh.__morphExactCache)) mesh.__morphExactCache[name] = morphIndexExact(mesh, [name]);
+  return mesh.__morphExactCache[name];
 }
 function setMorph(name, value) {
   for (const mesh of morphMeshes) {
@@ -182,7 +198,8 @@ function updateBlink(dt) {
       blink.next = Math.random() < 0.15 ? 0.12 : BLINK.minGap + Math.random() * (BLINK.maxGap - BLINK.minGap);
     }
   }
-  setMorph(BLINK.morph, value);
+  // Hält ein Ausdruck die Augen schon (halb) geschlossen, nur den Rest blinzeln
+  setMorph(BLINK.morph, value * (1 - eyeClosedness));
 }
 
 // --- Manueller Mund (Taste M, z. B. zum Testen) ----------------------------
@@ -197,12 +214,27 @@ window.addEventListener("keydown", (event) => {
 });
 
 function updateFace(dt) {
+  updateExpressions(dt);           // Mimik (expressions.js) - vor dem Blinzeln
   updateBlink(dt);
   const t = performance.now() / 1000 - lipsync.startTime;
   const target = lipsyncTarget(t);
+  // Läuft echtes Audio (voice.js), folgt die Mundöffnung seiner Lautstärke:
+  // Mundformen aus dem Text, Öffnung aus dem Audio; in Pausen geht der Mund zu.
+  const env = typeof voiceEnvelope === "function" ? voiceEnvelope(dt) : null;
+  if (env !== null) {
+    const sum = target.A + target.I + target.U + target.E + target.O;
+    const open = 0.3 + 0.7 * env;
+    for (const key of Object.keys(target)) target[key] *= open;
+    if (sum < 0.15) {                // Text ohne Lautregeln (z. B. Japanisch): nur nach Lautstärke
+      target.A = Math.max(target.A, 0.75 * env);
+      target.O = Math.max(target.O, 0.2 * env);
+    }
+    if (env < 0.04) for (const key of Object.keys(target)) target[key] *= env / 0.04;
+  }
   for (const key of Object.keys(lipsync.weights)) {
     const goal = Math.min(1, target[key]) * LIPSYNC.intensity;
     lipsync.weights[key] = damp(lipsync.weights[key], goal, LIPSYNC.smoothing, dt);
     setMorph(LIPSYNC.morphs[key], lipsync.weights[key]);
   }
+  applyMorphOverrides();           // Shape Keys von Hand (Panel) haben das letzte Wort
 }

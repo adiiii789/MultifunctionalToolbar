@@ -24,10 +24,15 @@ const IDLE = {
 
 const look = {
   yaw: 0, pitch: 0, roll: 0,            // aktuelle Kopfhaltung
+  bodyYaw: 0, bodyPitch: 0,             // Oberkörper folgt verzögert
   tYaw: 0, tPitch: 0, tRoll: 0,         // Ziel
   eyeYaw: 0, eyePitch: 0,
-  next: 0                               // Zeitpunkt des nächsten Blickwechsels
+  next: 0,                              // Zeitpunkt des nächsten Blickwechsels
+  v: {}                                 // Geschwindigkeiten für smoothDamp
 };
+// Anteile der Blickdrehung: Oberkörper dreht ein Stück mit, der Rest Hals + Kopf
+const LOOK_SHARE = { upper: 0.14, upper2: 0.12, neck: 0.30, head: 0.44 };
+const LOOK_TIME = { head: 0.32, body: 0.75, roll: 0.45 };   // Glättungszeiten in s (Oberkörper träger)
 
 function pickLookTarget(time) {
   const r = Math.random();
@@ -45,19 +50,25 @@ function pickLookTarget(time) {
 
 function updateLook(time, dt) {
   const mouse = headFollow ? getMouseLook() : null;
-  if (mouse) {                            // Maus übersteuert das Umschauen
+  if (typeof pet !== "undefined" && pet.active) {   // beim Streicheln nicht zur Hand hochschauen
+    look.tYaw = 0; look.tPitch = 0; look.tRoll = 0;
+  } else if (mouse) {                     // Maus übersteuert das Umschauen
     look.tYaw = mouse.yaw;
     look.tPitch = mouse.pitch;
     look.tRoll = -look.tYaw * 0.15;
   } else if (time >= look.next) {
     pickLookTarget(time);
   }
-  // Augen springen schnell (Sakkade), der Kopf folgt weich hinterher
+  // Augen springen schnell (Sakkade), der Kopf folgt weich hinterher (beschleunigen +
+  // abbremsen statt gleichmäßig), der Oberkörper noch etwas träger.
   look.eyeYaw   = damp(look.eyeYaw,   look.tYaw,   14, dt);
   look.eyePitch = damp(look.eyePitch, look.tPitch, 14, dt);
-  look.yaw   = damp(look.yaw,   look.tYaw,   2.6, dt);
-  look.pitch = damp(look.pitch, look.tPitch, 2.6, dt);
-  look.roll  = damp(look.roll,  look.tRoll,  2.0, dt);
+  const sd = (key, target, time) => smoothDamp(look[key], target, look.v[key] || (look.v[key] = { v: 0 }), time, dt);
+  look.yaw       = sd("yaw", look.tYaw, LOOK_TIME.head);
+  look.pitch     = sd("pitch", look.tPitch, LOOK_TIME.head);
+  look.roll      = sd("roll", look.tRoll, LOOK_TIME.roll);
+  look.bodyYaw   = sd("bodyYaw", look.tYaw, LOOK_TIME.body);
+  look.bodyPitch = sd("bodyPitch", look.tPitch, LOOK_TIME.body);
 }
 
 const _ankleMid = new THREE.Vector3(), _eyesPos = new THREE.Vector3(), _invRoot = new THREE.Quaternion();
@@ -112,15 +123,26 @@ function applyIdle(time, w) {
   rotate(rig.upper, AXIS.x, IDLE.sway * 0.5 * smoothNoise(swayT * 0.6, 7.7) * sw);
   rotate(rig.lower, AXIS.z, -IDLE.sway * 0.3 * smoothNoise(swayT, 1.3) * sw);
 
-  // 4) Kopf: Umschauen, aufgeteilt auf Hals (40 %) und Kopf (60 %), plus Mikrobewegung
+  // 4) Blick: Oberkörper dreht (verzögert) ein Stück mit, Hals und Kopf den Rest,
+  //    plus Mikrobewegung. Arme hängen am Oberkörper und drehen automatisch mit.
   const microYaw = 0.012 * smoothNoise(time * 0.9, 2.2);
   const microPitch = 0.010 * smoothNoise(time * 0.8, 5.4);
-  const yaw = (look.yaw + microYaw) * w, pitch = (look.pitch + microPitch) * w, roll = look.roll * w;
-  rotate(rig.neck, AXIS.y, yaw * 0.4);
-  rotate(rig.neck, AXIS.x, pitch * 0.4);
-  rotate(rig.head, AXIS.y, yaw * 0.6);
-  rotate(rig.head, AXIS.x, pitch * 0.6);
-  rotate(rig.head, AXIS.z, roll);
+  const S = LOOK_SHARE;
+  const bodyYaw = look.bodyYaw * w, bodyPitch = look.bodyPitch * w;
+  rotate(rig.upper,  AXIS.y, bodyYaw * S.upper);
+  rotate(rig.upper2, AXIS.y, bodyYaw * S.upper2);
+  rotate(rig.upper2, AXIS.x, bodyPitch * 0.12);
+  rotate(rig.lower,  AXIS.y, -bodyYaw * 0.04);                 // Becken minimal gegen
+  // Hals + Kopf gleichen aus, damit die Summe genau dem Blick entspricht
+  const restYaw = (look.yaw + microYaw) * w - bodyYaw * (S.upper + S.upper2);
+  const restPitch = (look.pitch + microPitch) * w - bodyPitch * 0.12;
+  const k = S.neck + S.head;
+  rotate(rig.neck, AXIS.y, restYaw * S.neck / k);
+  rotate(rig.neck, AXIS.x, restPitch * 0.4);
+  rotate(rig.head, AXIS.y, restYaw * S.head / k);
+  rotate(rig.head, AXIS.x, restPitch * 0.6);
+  rotate(rig.head, AXIS.z, look.roll * w);
+  rotate(rig.neck, AXIS.z, look.roll * 0.2 * w);
 
   // 5) Augen führen den Blick an (Vorsprung vor dem Kopf)
   const eyeYaw = clamp((look.eyeYaw - look.yaw) * 1.4, -0.25, 0.25) * w;

@@ -1,0 +1,8 @@
+venv/
+rvc/
+models/
+logs/
+_rvc_tmp/
+_assets_keep/
+test_miku.wav
+__pycache__/

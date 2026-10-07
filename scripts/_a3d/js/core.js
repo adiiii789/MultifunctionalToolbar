@@ -8,7 +8,7 @@
 const MODE = (new URLSearchParams(location.search).get("mode") || "window").toLowerCase();
 // Position und Größe des Chats setzt stage.js (Streifen unter dem Board)
 
-let scene, camera, renderer, mixer, outlineEffect;
+let scene, camera, renderer, outlineEffect;   // mixer: siehe clips.js
 const morphMeshes = []; // alle Meshes mit MorphTargets
 
 // Chat

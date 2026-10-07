@@ -41,7 +41,18 @@ const STAGE = {
     targetY: 0.88,      // Höhe des Bildmittelpunkts in Metern
     fov: 30             // Brennweite (kleiner = weniger Verzerrung)
   },
-  // Mausblick: wie stark der Kopf dem Abstand Maus <-> Augen folgt
+  // Mausblick: Wo muss die Maus stehen, damit die Figur geradeaus schaut?
+  //   "screen" = Mitte des Bildschirms, auf dem das Fenster liegt
+  //   "window" = Mitte des Fensters
+  //   { x, y } = Anteil der Fensterbreite/-höhe (0.5 = Mitte); null bei einer
+  //              Achse = Augenhöhe der Figur, z. B. { x: 0.5, y: null }
+  // Gilt nur, solange das Layout nicht im Panel kalibriert ist (👀 Blick).
+  // Setzt das Plugin den Punkt per setLookCenter(x, y), hat das Vorrang.
+  lookCenter: "screen",
+  // Blickmitte wandert mit der Figur mit, wenn sie zu einer Station läuft
+  // (die Kalibrierung gilt dann relativ zur Figur, nicht fest im Fenster).
+  lookFollowsFigure: true,
+  // wie stark der Kopf dem Abstand Maus <-> Mittelpunkt folgt
   lookYawScale: 0.55,
   lookLimits: { yaw: 0.7, up: 0.25, down: 0.18 },
   // Wie stark der Kopf nach oben/unten folgt, wenn die Maus über/unter den
@@ -194,7 +205,10 @@ function applyCameraFraming() {
    ========================================================================= */
 const _ndc = new THREE.Vector2(), _headPos = new THREE.Vector3();
 let mouseClientX = window.innerWidth * 0.6, mouseClientY = window.innerHeight * 0.4;
-window.addEventListener("mousemove", (e) => { mouseClientX = e.clientX; mouseClientY = e.clientY; });
+window.addEventListener("mousemove", (e) => {
+  mouseClientX = e.clientX; mouseClientY = e.clientY;
+  if (typeof petMouseMoved === "function") petMouseMoved(mouseClientX, mouseClientY);   // Streicheln (pet.js)
+});
 
 /** Mausposition von außen setzen (Fensterkoordinaten in px, dürfen auch
     außerhalb des Fensters liegen). Das Plugin ruft das ~30x/s auf, damit der
@@ -202,22 +216,192 @@ window.addEventListener("mousemove", (e) => { mouseClientX = e.clientX; mouseCli
 function setExternalMouse(x, y) {
   mouseClientX = x;
   mouseClientY = y;
+  if (typeof petMouseMoved === "function") petMouseMoved(x, y);
 }
 
 /** Kopfdrehung (yaw/pitch, Körperraum) zum Mauszeiger. null = kein Ziel.
-    Gerechnet wird mit dem Abstand Maus <-> Augen auf dem Bildschirm:
-    Maus auf dem Gesicht = geradeaus, Maus aufs Board = Kopf dreht zum Board. */
+    Gerechnet wird mit dem Abstand Maus <-> Mittelpunkt (STAGE.lookCenter) auf
+    dem Bildschirm: Maus im Mittelpunkt = geradeaus, sonst dreht der Kopf hin. */
 function getMouseLook() {
   if (!camera || !rig.head || !modelRoot) return null;
   _ndc.set(mouseClientX / window.innerWidth * 2 - 1, -(mouseClientY / window.innerHeight) * 2 + 1);
-  const eye = eyePosition(_headPos).project(camera);
+  const c = lookCenterNdc();
   const L = STAGE.lookLimits;
-  // Beim Herumlaufen ist die Figur gedreht: links/rechts dann in Körperrichtung umrechnen
+  // Falls die Figur gedreht ist: links/rechts in Körperrichtung umrechnen
   const facing = Math.cos(modelRoot.rotation.y);
   return {
-    yaw: clamp((_ndc.x - eye.x) * STAGE.lookYawScale * facing, -L.yaw, L.yaw),
-    pitch: clamp((eye.y - _ndc.y) * STAGE.lookPitchScale, -L.up, L.down)
+    yaw: clamp((_ndc.x - c.x) * STAGE.lookYawScale * facing, -L.yaw, L.yaw),
+    pitch: clamp((c.y - _ndc.y) * STAGE.lookPitchScale, -L.up, L.down)
   };
+}
+
+/** Blickmittelpunkt von außen setzen (Fensterkoordinaten in px, wie bei
+    setExternalMouse; darf außerhalb des Fensters liegen). Das Plugin kennt
+    Bildschirm und Fensterlage exakt und kann damit die Browser-Schätzung
+    ersetzen. setLookCenter(null) = wieder STAGE.lookCenter verwenden. */
+let externalLookCenter = null;
+function setLookCenter(x, y) {
+  externalLookCenter = x == null || y == null ? null : { x: x, y: y };
+}
+
+/* =========================================================================
+   Lage des Fensters auf dem Bildschirm
+   -------------------------------------------------------------------------
+   Das Plugin schickt per setScreenInfo() die genaue Lage (Qt kennt sie
+   exakt, auch bei mehreren Monitoren). Ohne Plugin wird aus den
+   Browser-Angaben geschätzt. Alle Werte in CSS-Pixeln.
+   ========================================================================= */
+let externalScreenInfo = null;
+/** Vom Plugin: linke obere Ecke des Viewers (global) und der nutzbare Bereich
+    des Bildschirms, auf dem das Fenster liegt (ohne Taskleiste). */
+function setScreenInfo(winLeft, winTop, scrLeft, scrTop, scrWidth, scrHeight) {
+  externalScreenInfo = { winLeft, winTop, scrLeft, scrTop, scrWidth, scrHeight };
+}
+function screenInfo() {
+  if (externalScreenInfo) return externalScreenInfo;
+  const s = window.screen;
+  // Ränder/Titelleiste: Abstand zwischen Außen- und Innenmaß des Fensters
+  const border = Math.max(0, (window.outerWidth - window.innerWidth) / 2);
+  const titleBar = Math.max(0, window.outerHeight - window.innerHeight - border);
+  return {
+    winLeft: window.screenX + border, winTop: window.screenY + titleBar,
+    scrLeft: s.availLeft != null ? s.availLeft : 0, scrTop: s.availTop != null ? s.availTop : 0,
+    // ohne Angaben (sollte nicht vorkommen): Fenster als Bildschirm annehmen
+    scrWidth: s.availWidth > 0 ? s.availWidth : window.innerWidth,
+    scrHeight: s.availHeight > 0 ? s.availHeight : window.innerHeight
+  };
+}
+/** Punkt auf dem Bildschirm (Anteil 0..1) -> Fensterkoordinaten (px). */
+function screenFracToWindow(sx, sy) {
+  const i = screenInfo();
+  return { x: i.scrLeft + sx * i.scrWidth - i.winLeft, y: i.scrTop + sy * i.scrHeight - i.winTop };
+}
+/** Mitte des aktuellen Bildschirms in Fensterkoordinaten (px). */
+function screenCenterInWindow() { return screenFracToWindow(0.5, 0.5); }
+
+/* =========================================================================
+   Kalibrierung des Blickmittelpunkts (Panel: "👀 Blick")
+   -------------------------------------------------------------------------
+   Popup und Fenster sind unabhängig: Das Plugin öffnet den Viewer mit
+   ?mode=popup bzw. ?mode=window, jeder Modus hat seine eigene Kalibrierung
+   (und seine eigene Datei). Innerhalb eines Modus getrennt nach Layout:
+   "narrow" (schmal) und "wide" (breit, z. B. Popup nach "⇔ Breit").
+   Gespeichert als Anteil der Fenstergröße (bewegt sich mit dem Fenster mit;
+   Werte außerhalb 0..1 = Punkt liegt außerhalb des Fensters).
+   Speicherort: look_calibration_<modus>.json im _a3d-Ordner über den Server
+   des Plugins (überlebt Neustarts), dazu localStorage als Rückfall.
+   ========================================================================= */
+const VIEW_MODE = (function () {
+  const m = (new URLSearchParams(location.search).get("mode") || "window").toLowerCase();
+  return m === "popup" ? "popup" : "window";
+})();
+const LOOK_CAL_KEY = "a3d.lookCalibration.v3." + VIEW_MODE;
+const LOOK_CAL_FILE = "look_calibration_" + VIEW_MODE + ".json";
+const LOOK_LAYOUTS = ["narrow", "wide"];
+let lookCalibration = { wide: null, narrow: null };
+let lookCalSavedAt = 0;
+const lookCalViaServer = /^https?:$/.test(location.protocol);
+
+function cleanLookCalibration(v) {
+  const out = { wide: null, narrow: null };
+  if (v && typeof v === "object") {
+    for (const k of LOOK_LAYOUTS) {
+      const p = v[k];
+      if (p && isFinite(p.x) && isFinite(p.y)) out[k] = { x: +p.x, y: +p.y };
+    }
+  }
+  return out;
+}
+
+function loadLookCalibration() {
+  try { lookCalibration = cleanLookCalibration(JSON.parse(localStorage.getItem(LOOK_CAL_KEY) || "null")); }
+  catch (e) { /* kein localStorage -> Datei oder nur diese Sitzung */ }
+  reloadLookCalibrationFile();
+}
+/** Datei vom Plugin-Server lesen (hat Vorrang vor localStorage). */
+function reloadLookCalibrationFile() {
+  if (!lookCalViaServer || Date.now() - lookCalSavedAt < 2000) return;   // eigenes Speichern läuft noch
+  fetch(LOOK_CAL_FILE + "?t=" + Date.now(), { cache: "no-store" })
+    .then(r => (r.ok ? r.json() : null))
+    .then(v => { if (v) { lookCalibration = cleanLookCalibration(v); lookCalibrationChanged(); } })
+    .catch(() => { /* noch keine Datei */ });
+}
+function saveLookCalibration() {
+  try { localStorage.setItem(LOOK_CAL_KEY, JSON.stringify(lookCalibration)); } catch (e) { /* ignorieren */ }
+  if (lookCalViaServer) {
+    lookCalSavedAt = Date.now();
+    fetch(LOOK_CAL_FILE, { method: "POST", headers: { "Content-Type": "application/json" },
+                           body: JSON.stringify(lookCalibration) })
+      .then(r => { if (!r.ok) console.warn("Blick-Kalibrierung: Speichern über das Plugin fehlgeschlagen (" +
+                                           r.status + ") - gilt nur bis zum Neustart. Plugin aktualisiert?"); })
+      .catch(() => {});
+  }
+  lookCalibrationChanged();
+}
+function lookCalibrationChanged() {
+  if (typeof updateLookStatus === "function") updateLookStatus();
+}
+function currentLayoutKey() { return stageState.narrow ? "narrow" : "wide"; }
+
+/** Aktuelle Mausposition als Blickmitte des aktuellen Layouts übernehmen. */
+function calibrateLookCenterHere() {
+  // Gespeichert wird der Punkt so, als stünde die Figur am Startplatz -
+  // dann stimmt er auch, wenn gerade an einer Station kalibriert wird.
+  const shift = figureScreenShift();
+  const p = { x: (mouseClientX - shift.x) / window.innerWidth, y: (mouseClientY - shift.y) / window.innerHeight };
+  lookCalibration[currentLayoutKey()] = p;
+  saveLookCalibration();
+  return p;
+}
+/** Kalibrierung verwerfen ("wide", "narrow" oder "all"; Standard: aktuelles Layout). */
+function resetLookCalibration(which = currentLayoutKey()) {
+  if (which === "all") lookCalibration = { wide: null, narrow: null };
+  else lookCalibration[which] = null;
+  saveLookCalibration();
+}
+/** Von außen: Kalibrierung dieses Modus lesen (Objekt) bzw. setzen (Objekt oder JSON-Text). */
+function getLookCalibration() { return JSON.parse(JSON.stringify(lookCalibration)); }
+function setLookCalibration(cal) {
+  lookCalibration = cleanLookCalibration(typeof cal === "string" ? JSON.parse(cal) : cal);
+  saveLookCalibration();
+}
+
+loadLookCalibration();
+// Beim erneuten Öffnen/Fokussieren frisch laden (z. B. nach Neustart des Viewers)
+window.addEventListener("focus", reloadLookCalibrationFile);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) reloadLookCalibrationFile(); });
+
+/** Blick-Mittelpunkt in NDC (-1..1).
+    Reihenfolge: setLookCenter() vom Plugin > Kalibrierung (Modus + Layout) > STAGE.lookCenter */
+/** Wie weit die Figur auf dem Bildschirm vom Startplatz weggelaufen ist
+    (Fenster-px, auf Augenhöhe gemessen). Am Startplatz: {x: 0, y: 0}. */
+const _shiftNow = new THREE.Vector3(), _shiftHome = new THREE.Vector3();
+function figureScreenShift() {
+  if (!modelRoot || !camera) return { x: 0, y: 0 };
+  const h = eyePosition(_headPos).y;
+  _shiftNow.set(modelRoot.position.x, h, modelRoot.position.z).project(camera);
+  _shiftHome.set(0, h, 0).project(camera);
+  return { x: (_shiftNow.x - _shiftHome.x) / 2 * window.innerWidth,
+           y: -(_shiftNow.y - _shiftHome.y) / 2 * window.innerHeight };
+}
+
+const _lookCenter = new THREE.Vector2();
+function lookCenterNdc() {
+  const W = window.innerWidth, H = window.innerHeight;
+  const lc = STAGE.lookCenter;
+  // Blickmitte wandert mit, wenn die Figur zu einer Station läuft (STAGE.lookFollowsFigure)
+  const shift = STAGE.lookFollowsFigure ? figureScreenShift() : { x: 0, y: 0 };
+  const toNdc = (px, py) => _lookCenter.set((px + shift.x) / W * 2 - 1, -((py + shift.y) / H) * 2 + 1);
+  if (externalLookCenter) return toNdc(externalLookCenter.x, externalLookCenter.y);
+  const cal = lookCalibration[currentLayoutKey()];
+  if (cal) return toNdc(cal.x * W, cal.y * H);
+  if (lc === "screen") { const c = screenCenterInWindow(); return toNdc(c.x, c.y); }
+  if (lc === "window" || !lc) return toNdc(W / 2, H / 2);
+  // { x, y } als Fensteranteil; null bei einer Achse = Augenhöhe der Figur (wandert ohnehin mit)
+  const eye = lc.x == null || lc.y == null ? eyePosition(_headPos).project(camera) : null;
+  _lookCenter.set(lc.x == null ? eye.x : (lc.x * W + shift.x) / W * 2 - 1,
+                  lc.y == null ? eye.y : -((lc.y * H + shift.y) / H) * 2 + 1);
+  return _lookCenter;
 }
 
 /** Augenposition (Mitte zwischen den Augenknochen, sonst Kopf + 15 cm). */

@@ -235,8 +235,8 @@ function resetPhysics() {
 }
 
 /* Hände aus dem Rock halten: Liegt eine Hand in der Rock-Hülle, wird der
-   Oberarm minimal nach außen gedreht, bis sie draußen ist (wirkt auch bei
-   Gesten wie dem Verbeugen). */
+   Oberarm minimal nach außen gedreht, bis sie draußen ist (z. B. beim
+   Armschwung im Laufen). */
 function keepHandsOutOfSkirt() {
   const hull = colliderShapes.skirt || [];
   if (!hull.length) return;

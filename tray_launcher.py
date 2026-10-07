@@ -97,6 +97,9 @@ PROGRAM_ICON = "ProgrammIcon.ico"
 TRAY_ICON = "TrayIcon.ico"
 
 POPUP_OPACITY = 0.97                  # Transparenz des Rechtsklick-Popups (1.0 = deckend)
+# Größe nach "⇔ Breit" im Popup (Anteil des Bildschirms), wenn ein Plugin
+# keine eigene POPUP_WIDTH/-HEIGHT angibt. Der Knopf erscheint bei jedem Plugin.
+POPUP_WIDE_SIZE = (0.5, 0.6)
 MAIN_WINDOW_OPACITY = 1.0             # Transparenz des Hauptfensters
 
 # Plugin-Liste als HTML (ui/explorer.html). False/ohne WebEngine -> Qt-Explorer.
@@ -1713,13 +1716,13 @@ class PopupWindow(ExplorerMixin, QWidget):
                 size_label="⇤ Schmal" if self.plugin_size_active else "⇔ Breit"))
 
     def show_plugin_widget(self, widget: QWidget, title: str = "", meta: PluginMeta | None = None) -> None:
-        # Plugins mit POPUP_WIDTH/-HEIGHT öffnen breiter; der Größen-Knopf schaltet um
+        # Größen-Knopf "⇔ Breit" neben "← Explorer": Plugins mit POPUP_WIDTH/-HEIGHT
+        # nutzen ihre eigene Größe, alle anderen POPUP_WIDE_SIZE.
         if meta is not None and (meta.popup_width or meta.popup_height):
             self.plugin_size = (meta.popup_width, meta.popup_height)
-            self.plugin_size_active = False  # schmal starten, "⇔ Breit" vergrößert
         else:
-            self.plugin_size = None
-            self.plugin_size_active = False
+            self.plugin_size = POPUP_WIDE_SIZE
+        self.plugin_size_active = False  # schmal starten, "⇔ Breit" vergrößert
         self.build_toolbar()
         container = QWidget()
         layout = QVBoxLayout(container)

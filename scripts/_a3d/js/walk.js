@@ -1,17 +1,21 @@
-/* walk.js - Laufen: Gangzyklus und Bewegung im Raum
+/* walk.js - Laufen: Gangzyklus für Beine, Hüfte, Arme + Gehen zu einem Ziel
    Teil des 3D-Assistenten (siehe viewer.html für die Ladereihenfolge).
    Alle Dateien sind klassische Skripte und teilen sich den globalen Bereich. */
 
 /* =========================================================================
-   Laufen (prozedural): Gangzyklus für Beine, Hüfte, Arme + Bewegung im Raum
+   Laufen (prozedural, auf der Stelle)
    -------------------------------------------------------------------------
    Phase p läuft 2π pro Doppelschritt. sin(p) > 0 = linkes Bein vorne.
    Die Hüfte senkt sich, wenn die Beine gespreizt sind - so bleiben die Füße
    ohne IK ungefähr am Boden.
+   Zwei Arten:
+   - auf der Stelle (walk.mode = "place")
+   - zu einem Ziel (walk.target, gesetzt von walkTo() in stations.js): erst
+     in Laufrichtung eindrehen, hingehen, am Ziel in die gewünschte Richtung
+     drehen, dann stehen bleiben.
    ========================================================================= */
 const WALK = {
   cadence: 1.8,        // Schritte pro Sekunde
-  stride: 0.40,        // Strecke pro Schritt (m) -> Tempo = stride * cadence
   thigh: 0.38,         // Oberschenkel-Schwung (rad)
   knee: 0.80,          // Kniebeuge in der Schwungphase
   hipYaw: 0.09,        // Becken dreht mit
@@ -20,10 +24,12 @@ const WALK = {
   armSwing: 0.30,
   elbow: 0.30,
   legLength: 0.76,     // Hüfte bis Knöchel (für die Hüftabsenkung)
-  // Weg beim Herumlaufen: Ellipse vor der Kamera, beginnt im Ursprung
-  path: { rx: 0.9, rz: 0.45 }
+  stride: 0.40,        // Strecke pro Schritt (m) -> Tempo = stride * cadence
+  turnRate: 4.5,       // wie schnell sie sich dreht (1/s)
+  arriveDist: 0.015    // ab hier gilt das Ziel als erreicht (m)
 };
-const walk = { mode: "none", weight: 0, phase: 0, a: 0, yaw: 0 };  // mode: none | place | around
+// mode: none | place;  target: {pos(): {x, z}, yaw, done(ok)} oder null
+const walk = { mode: "none", weight: 0, phase: 0, yaw: 0, target: null };
 
 function dampAngle(cur, target, rate, dt) {
   let d = target - cur;
@@ -31,41 +37,45 @@ function dampAngle(cur, target, rate, dt) {
   return cur + d * (1 - Math.exp(-rate * dt));
 }
 
-/** Bewegt das Modell durch den Raum und bestimmt, ob gelaufen wird. */
-function updateLocomotion(dt) {
+/** Pro Frame: Figur zum Ziel bewegen/drehen und Laufen weich ein-/ausblenden. */
+function updateWalkWeight(dt) {
   const root = modelRoot;
-  const speed = WALK.stride * WALK.cadence;
-  const { rx, rz } = WALK.path;
-  let moving = false, targetYaw = 0;
-  if (walk.mode === "around") {
-    // Ellipse: x = rx·sin a, z = rz·cos a - rz  (a = 0 -> Ursprung)
-    const len = Math.hypot(rx * Math.cos(walk.a), rz * Math.sin(walk.a));
-    walk.a += speed * walk.weight * dt / Math.max(len, 1e-3);
-    root.position.set(rx * Math.sin(walk.a), 0, rz * Math.cos(walk.a) - rz);
-    targetYaw = Math.atan2(rx * Math.cos(walk.a), -rz * Math.sin(walk.a));
-    moving = true;
-  } else {
-    const d = Math.hypot(root.position.x, root.position.z);
-    if (d > 0.02) {                                             // zurück zur Mitte laufen
-      const step = Math.min(d, speed * Math.max(walk.weight, 0.3) * dt);
-      targetYaw = Math.atan2(-root.position.x, -root.position.z);
-      // erst eindrehen, dann gehen
+  let moving = false;
+  const t = walk.target;
+  if (t) {
+    const goal = t.pos();
+    const dx = goal.x - root.position.x, dz = goal.z - root.position.z;
+    const d = Math.hypot(dx, dz);
+    let targetYaw;
+    if (d > WALK.arriveDist) {
+      targetYaw = Math.atan2(dx, dz);                            // Laufrichtung
       const facing = Math.cos(targetYaw - walk.yaw);
-      if (facing > 0.5) {
-        root.position.x -= root.position.x / d * step;
-        root.position.z -= root.position.z / d * step;
+      if (facing > 0.5) {                                       // erst eindrehen, dann gehen
+        const speed = WALK.stride * WALK.cadence * Math.max(walk.weight, 0.3) * facing;
+        const step = Math.min(d, speed * dt);
+        root.position.x += dx / d * step;
+        root.position.z += dz / d * step;
       }
       moving = true;
     } else {
-      root.position.set(0, 0, 0);
-      targetYaw = 0;                                            // zum Betrachter drehen
-      moving = Math.abs(Math.atan2(Math.sin(walk.yaw), Math.cos(walk.yaw))) > 0.15;
+      root.position.x = goal.x;
+      root.position.z = goal.z;
+      targetYaw = t.yaw;                                        // am Ziel in Blickrichtung drehen
+      const diff = Math.abs(Math.atan2(Math.sin(targetYaw - walk.yaw), Math.cos(targetYaw - walk.yaw)));
+      moving = diff > 0.15;                                     // größere Drehung: mit kleinen Schritten
+      if (diff < 0.03) { walk.target = null; t.done(true); }
     }
+    walk.yaw = dampAngle(walk.yaw, targetYaw, WALK.turnRate, dt);
   }
-  walk.yaw = dampAngle(walk.yaw, targetYaw, 4, dt);
   root.rotation.set(0, walk.yaw, 0);
-  const wantWalk = walk.mode !== "none" || moving;
-  walk.weight = damp(walk.weight, wantWalk ? 1 : 0, 4, dt);
+  walk.weight = damp(walk.weight, walk.mode === "place" || moving ? 1 : 0, 4, dt);
+}
+
+/** Laufenden Weg abbrechen (Figur bleibt, wo sie gerade ist). */
+function cancelWalkTarget() {
+  const t = walk.target;
+  walk.target = null;
+  if (t) t.done(false);
 }
 
 function walkLeg(thigh, knee, ankle, s, c, w) {

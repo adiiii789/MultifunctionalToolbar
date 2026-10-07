@@ -12,7 +12,7 @@
    Positiver Winkel um X  -> nach vorne neigen / nicken
    Positiver Winkel um Y  -> nach links (Figur) drehen
    Positiver Winkel um Z  -> zur rechten Schulter (Figur) neigen
-   Jeder Frame startet in der Ruhepose, dann kommen Idle und Gesten dazu.
+   Jeder Frame startet in der Ruhepose, dann kommen Idle und Laufen dazu.
    ========================================================================= */
 const AXIS = {
   x: new THREE.Vector3(1, 0, 0),
@@ -39,6 +39,8 @@ const RIG_NAMES = {
   wristR:    ["手首.R", "RightHand", "hand.R"],
   handTipL:  ["中指１.L", "LeftHandMiddle1"],
   handTipR:  ["中指１.R", "RightHandMiddle1"],
+  twistL:    ["手捩.L", "LeftForeArmRoll"],
+  twistR:    ["手捩.R", "RightForeArmRoll"],
   center:    ["センター", "Hips", "hips"],
   legL:      ["足.L", "LeftUpLeg", "thigh.L"],
   legR:      ["足.R", "RightUpLeg", "thigh.R"],
@@ -51,7 +53,7 @@ const RIG_NAMES = {
 let rig = {};             // Rollenname -> Bone
 let restPose = [];        // [bone, Ruhe-Quaternion, Ruhe-Position]
 let modelRoot = null;
-let gesture = null;
+let gesture = null;       // laufende Geste (gestures.js)
 let headFollow = true;         // Kopf folgt der Maus (Standard: an)
 let idleEnabled = false;
 let idleWeight = 0;       // weiches Ein-/Ausblenden des Idles (0..1)
@@ -129,14 +131,52 @@ function aimAt(bone, child, point, weight = 1) {
   if (!bone) return;
   aimWorld(bone, child, point.clone().sub(bone.getWorldPosition(new THREE.Vector3())), weight);
 }
+/** Zwei-Knochen-IK: Hand (Handgelenk) zu einem Weltpunkt führen.
+    Der Ellbogen knickt Richtung pole (Körperrichtung, Standard: nach unten-hinten-außen).
+    Reicht der Arm nicht, wird er ganz gestreckt in Richtung Ziel gehalten. */
+function reachTo(side, point, weight = 1, pole = null) {
+  const arm = rig["arm" + side], elbow = rig["elbow" + side], wrist = rig["wrist" + side];
+  if (!arm || !elbow || !wrist || weight <= 0) return;
+  const S = arm.getWorldPosition(new THREE.Vector3());
+  const E = elbow.getWorldPosition(new THREE.Vector3());
+  const W = wrist.getWorldPosition(new THREE.Vector3());
+  const a = S.distanceTo(E), b = E.distanceTo(W);
+  const toT = point.clone().sub(S);
+  const d = clamp(toT.length(), Math.abs(a - b) + 1e-3, a + b - 1e-3);
+  const dirT = toT.normalize();
+  const sx = side === "L" ? 1 : -1;
+  const p = toWorldDir(pole || dir(0.45 * sx, -0.55, -0.7), new THREE.Vector3());
+  p.addScaledVector(dirT, -p.dot(dirT)).normalize();              // Knickrichtung senkrecht zur Ziellinie
+  const cosA = clamp((a * a + d * d - b * b) / (2 * a * d), -1, 1);
+  const elbowTarget = S.clone().addScaledVector(dirT, a * cosA).addScaledVector(p, a * Math.sqrt(1 - cosA * cosA));
+  aimWorld(arm, elbow, elbowTarget.sub(S), weight);
+  aimAt(elbow, wrist, point, weight);
+}
+
+/** Kopf drehen - Oberkörper, Hals und Kopf teilen sich die Bewegung.
+    yaw + = nach links (Figur), pitch + = nach unten, roll + = zur rechten Schulter.
+    Genutzt vom Mausblick ohne Idle und von den Gesten (Nicken, Kopf neigen ...). */
+function turnHead(yaw, pitch, roll, w = 1) {
+  rotate(rig.upper,  AXIS.y, yaw * 0.12 * w);
+  rotate(rig.upper2, AXIS.y, yaw * 0.10 * w);
+  rotate(rig.upper2, AXIS.x, pitch * 0.10 * w);
+  rotate(rig.neck,   AXIS.y, yaw * 0.28 * w);
+  rotate(rig.neck,   AXIS.x, pitch * 0.30 * w);
+  rotate(rig.head,   AXIS.y, yaw * 0.50 * w);
+  rotate(rig.head,   AXIS.x, pitch * 0.60 * w);
+  rotate(rig.head,   AXIS.z, roll * w);
+  rotate(rig.neck,   AXIS.z, roll * 0.25 * w);
+}
+
 function aimWorld(bone, child, worldDir, weight) {
   if (!bone || !child || weight <= 0) return;
   bone.getWorldPosition(_va);
   child.getWorldPosition(_vb);
   const current = _vb.sub(_va).normalize();
   const full = new THREE.Quaternion().setFromUnitVectors(current, _va.copy(worldDir).normalize());
-  // Anteilig drehen: von "keine Drehung" (identity) bis "volle Drehung"
-  const q = weight < 1 ? new THREE.Quaternion().slerpQuaternions(_identity, full, weight) : full;
+  // Anteilig drehen: von "keine Drehung" (identity) bis "volle Drehung".
+  // Gewicht > 1 (Schwung durch outBack-Easing) dreht minimal übers Ziel hinaus.
+  const q = weight !== 1 ? new THREE.Quaternion().slerpQuaternions(_identity, full, weight) : full;
   applyWorldRotation(bone, q);
 }
 
@@ -152,27 +192,29 @@ function smoothNoise(t, seed) {
 const damp = (current, target, rate, dt) => current + (target - current) * (1 - Math.exp(-rate * dt));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-/** Pro Frame: Ruhepose -> Clip (Mixer) -> Laufweg -> Idle -> Laufzyklus -> Gesten -> Physik */
+/** Pro Frame: Ruhepose -> Clip (Mixer) -> Idle (inkl. Blick) -> Laufzyklus -> Geste -> Finger -> Physik */
 function updatePose(dt) {
   if (!modelRoot) return;
   const time = performance.now() / 1000;
   resetToRestPose();
-  if (mixer) mixer.update(dt);
-  updateLocomotion(dt);                 // Position/Drehung des Modells beim Laufen
+  updateClips(dt);                      // Blender-Animationen (clips.js)
+  updateWalkWeight(dt);                 // Laufen auf der Stelle weich ein-/ausblenden
   modelRoot.updateMatrixWorld(true);
 
   idleWeight = damp(idleWeight, idleEnabled ? 1 : 0, 6, dt);
   updateLook(time, dt);
-  if (idleWeight > 0.001) {
-    applyIdle(time, idleWeight);
-  } else if (headFollow) {
-    // Ohne Idle trotzdem dem Mauszeiger folgen
-    rotate(rig.head, AXIS.y, look.yaw);
-    rotate(rig.head, AXIS.x, look.pitch);
-  }
+  if (idleWeight > 0.001) applyIdle(time, idleWeight);
+  // Ohne Idle (z. B. während eines Clips) trotzdem dem Mauszeiger folgen -
+  // anteilig, damit beim Überblenden Idle <-> Clip nichts springt.
+  if (headFollow && idleWeight < 0.999) turnHead(look.yaw, look.pitch, 0, 1 - idleWeight);
   applyWalk(dt, walk.weight);
-  applyGesture();
-  if (PHYSICS.enabled && physicsInitialized) keepHandsOutOfSkirt();
+  applyGesture();                       // Gesten liegen über Idle, Laufen und Clips
+  updatePet(dt, time);                  // Streicheln am Kopf (pet.js)
+  // Lockere Finger nur ohne Clip - sonst würden animierte Finger zusätzlich gekrümmt.
+  // Handposen einer Geste gelten trotzdem (siehe updateHands).
+  updateHands(1 - clipWeight);
+  // Hände aus dem Rock schieben nur ohne Clip - die Animation soll gelten, wie sie ist
+  if (PHYSICS.enabled && physicsInitialized && clipWeight < 0.5) keepHandsOutOfSkirt();
   updatePhysics(dt);
 }
 

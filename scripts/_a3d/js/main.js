@@ -64,28 +64,36 @@ function init() {
           prepareMeshMaterials(child);
 
           if (child.morphTargetInfluences && child.morphTargetInfluences.length > 0) {
-            // Erstellt einen Cache für schnelle Lookup-Indexierung (lowercase -> index)
-            child.__morphIndexCache = {};
-            for (let key in child.morphTargetDictionary) {
-              child.__morphIndexCache[key.toLowerCase()] = child.morphTargetDictionary[key];
-            }
-            morphMeshes.push(child);
+            morphMeshes.push(child);   // Shape Keys: Zugriff über expressions.js / face.js
             console.log(`Mesh geladen: ${child.name}, MorphTargets:`, Object.keys(child.morphTargetDictionary));
           }
         }
       });
 
+      // Ohne WebGL 2 kann three.js nur 4 Shape Keys gleichzeitig zeigen, wenn
+      // sie auch Normalen verschieben (8 ohne). Die Normalen-Anteile sind für
+      // die Mimik kaum sichtbar -> weglassen, damit mehr Shape Keys gleichzeitig wirken.
+      if (!renderer.capabilities.isWebGL2) {
+        for (const m of morphMeshes) {
+          if (m.geometry.morphAttributes.normal) {
+            delete m.geometry.morphAttributes.normal;
+            console.warn("WebGL 1: Shape-Key-Normalen entfernt (sonst nur 4 Shape Keys gleichzeitig)");
+          }
+        }
+      }
+      console.log("Renderer: " + (renderer.capabilities.isWebGL2 ? "WebGL 2" : "WebGL 1"));
+
       scene.add(gltf.scene);
+      addDepthPrepass(gltf.scene);         // Augen-Ebenen verdecken sich korrekt (toon-shader.js)
       applyRenderStyle();
       buildStyleSection(document.getElementById("anim-panel"));
       indexBones(gltf.scene);
       document.getElementById("hint").style.display = "none";
 
-      mixer = new THREE.AnimationMixer(gltf.scene);
-      setupAnimationPanel(gltf.animations || []);
+      // Eigene Animationen aus Blender (Actions im GLB) - siehe clips.js
+      const skipped = setupClips(gltf.scene, gltf.animations || []);
+      setupAnimationPanel(skipped);
       playAnimation(IDLE_NAME);   // Standard: natürliches, prozedurales Idle
-
-      console.log("Geladene Animationen:", (gltf.animations || []).map(a => a.name));
     },
     undefined,
     function (error) {

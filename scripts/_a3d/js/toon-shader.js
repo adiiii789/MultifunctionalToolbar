@@ -154,7 +154,55 @@ function prepareMeshMaterials(mesh) {
   styledMeshes.push(mesh);
 }
 
-const renderStyle = { anime: true, outline: false, physics: true, debugCamera: false, brightness: 1.0 };
+const renderStyle = { anime: true, outline: false, physics: true, eyeDepth: true, debugCamera: false, brightness: 1.0 };
+
+/* =========================================================================
+   Tiefen-Vorlauf für die Augen-Ebenen
+   -------------------------------------------------------------------------
+   Augenweiß/Lidstrich ("Augen BG"), Pupillen und Highlights sind halb-
+   transparent und schreiben normalerweise keine Tiefe - dann malt three.js
+   sie einfach in Material-Reihenfolge übereinander, und Pupillen/Highlights
+   scheinen durch, obwohl ein Shape Key (z. B. "X)", "-_-") das Lid davor
+   geschoben hat. Lösung: Für jede dieser Ebenen ein unsichtbarer Zwilling,
+   der VOR allen transparenten Teilen nur die Tiefe schreibt (nur deckende
+   Pixel, Alpha > 0.5). Die sichtbaren Ebenen werden danach normal weich
+   überblendet, aber was dahinter liegt, wird korrekt verdeckt.
+   ========================================================================= */
+const DEPTH_PREPASS_GROUPS = new Set(["eyes"]);
+const DEPTH_PREPASS_OFFSET = 8;      // Abstand des Zwillings nach hinten (Tiefen-Einheiten)
+const depthPrepassMeshes = [];
+
+function addDepthPrepass(root) {
+  const list = [];
+  root.traverse(o => { if (o.isMesh && DEPTH_PREPASS_GROUPS.has(o.userData.toonGroup)) list.push(o); });
+  for (const mesh of list) {
+    const src = mesh.userData.materials ? mesh.userData.materials.standard : mesh.material;
+    const mat = new THREE.MeshBasicMaterial({
+      name: (src.name || "") + " (Tiefe)", map: src.map || null,
+      alphaTest: 0.5, transparent: false, colorWrite: false, depthWrite: true, side: src.side,
+      // Tiefe minimal nach hinten versetzt: Sonst verdeckt der Zwilling seine eigene
+      // sichtbare Ebene (zwei Shader rechnen die Tiefe nie ganz identisch).
+      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: DEPTH_PREPASS_OFFSET
+    });
+    mat.userData.outlineParameters = { visible: false };              // keine Konturlinie
+    const twin = mesh.isSkinnedMesh ? new THREE.SkinnedMesh(mesh.geometry, mat) : new THREE.Mesh(mesh.geometry, mat);
+    if (mesh.isSkinnedMesh) twin.bind(mesh.skeleton, mesh.bindMatrix);
+    twin.morphTargetInfluences = mesh.morphTargetInfluences;          // gleiche Shape Keys (selbes Array)
+    twin.morphTargetDictionary = mesh.morphTargetDictionary;
+    twin.position.copy(mesh.position);
+    twin.quaternion.copy(mesh.quaternion);
+    twin.scale.copy(mesh.scale);
+    twin.frustumCulled = mesh.frustumCulled;
+    twin.name = mesh.name + " (Tiefe)";
+    twin.visible = renderStyle.eyeDepth;
+    mesh.parent.add(twin);
+    depthPrepassMeshes.push(twin);
+  }
+  console.log("Augen-Tiefenvorlauf: " + depthPrepassMeshes.length + " Ebenen");
+}
+function applyEyeDepth() {
+  for (const m of depthPrepassMeshes) m.visible = renderStyle.eyeDepth;
+}
 
 function applyRenderStyle() {
   styledMeshes.forEach(m => {
