@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<!-- Eine Webseite auf dem Board (stage.js: showWebPageOnBoard) - die Seite, die Miku gelesen hat.
+     Der KI-Dienst hat vorher geprüft, dass sie öffentlich ist und eingebettet werden darf.
+     Sicherheit: Der Viewer ist Chromium 83 (QtWebEngine 5.15) mit bekannten Lücken. Die Seite läuft
+     deshalb in einer Sandbox - eigener, leerer Ursprung (keine Cookies/Speicher, kein Zugriff auf den
+     Viewer), keine Pop-ups, keine Downloads, kein Umleiten des Fensters - und standardmäßig ohne
+     Skripte (js=1 nur, wenn im Panel "Webseiten: Skripte erlauben" an ist). -->
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="referrer" content="no-referrer">
+  <title>Webseite</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: white;
+                 font-family: "Segoe UI", system-ui, sans-serif; }
+    #bar { height: 28px; display: flex; align-items: center; background: #1d2128; color: #e6e6e6;
+           font-size: 13px; padding: 0 10px; white-space: nowrap; overflow: hidden; }
+    #host { font-weight: 600; }
+    #bar > span + span { margin-left: 8px; }   /* Chromium 83: kein gap bei Flexbox */
+    #title { color: #9aa4b2; overflow: hidden; text-overflow: ellipsis; }
+    #bar > #mode { margin-left: auto; padding-left: 8px; color: #9aa4b2; font-size: 11px; }
+    #page { position: absolute; top: 28px; left: 0; right: 0; bottom: 0; width: 100%; height: calc(100% - 28px);
+            border: 0; background: white; }
+    #error { padding: 20px; color: #5b6470; }
+  </style>
+</head>
+<body>
+  <div id="bar"><span id="host"></span><span id="title"></span><span id="mode"></span></div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const scripts = params.get("js") === "1";
+    let url = null;
+    try { url = new URL(params.get("u") || ""); } catch (e) { /* ungültig */ }
+    document.getElementById("title").textContent = params.get("t") || "";
+    if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) {
+      const error = document.createElement("div");
+      error.id = "error";
+      error.textContent = "Keine gültige Webadresse.";
+      document.body.append(error);
+    } else {
+      document.getElementById("host").textContent = url.hostname;
+      document.getElementById("mode").textContent = scripts ? "Skripte an" : "ohne Skripte";
+      const frame = document.createElement("iframe");
+      frame.id = "page";
+      // Sandbox VOR src setzen; ohne allow-same-origin: eigener, leerer Ursprung
+      frame.setAttribute("sandbox", scripts ? "allow-scripts" : "");
+      frame.setAttribute("referrerpolicy", "no-referrer");
+      frame.src = url.href;
+      document.body.append(frame);
+    }
+  </script>
+</body>
+</html>

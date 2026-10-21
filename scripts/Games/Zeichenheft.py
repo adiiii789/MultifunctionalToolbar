@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Zeichenheft"
+DESCRIPTION = "Zeichenfläche zum Skizzieren und Malen; Zeichnungen werden gespeichert."
 ICON = "✏️"
 # ----------------------------------------
 

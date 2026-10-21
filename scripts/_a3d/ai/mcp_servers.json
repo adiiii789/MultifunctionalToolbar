@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "pda": {
+      "command": "python",
+      "args": ["mcp_servers/pda_server.py"]
+    },
+    "web": {
+      "command": "python",
+      "args": ["mcp_servers/web_server.py"]
+    }
+  }
+}

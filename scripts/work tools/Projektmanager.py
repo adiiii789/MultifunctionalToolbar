@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Projektmanager"
+DESCRIPTION = "Projekte mit Meilensteinen und Aufgaben planen und verfolgen."
 ICON = "📋"
 # ----------------------------------------
 

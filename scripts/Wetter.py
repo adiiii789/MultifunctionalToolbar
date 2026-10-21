@@ -1,6 +1,7 @@
 # --- Plugin-Parameter (neues System) ---
 HTML_BUTTON = True
 NAME = "Wetter"
+DESCRIPTION = "Aktuelles Wetter (Temperatur, Regenwahrscheinlichkeit) mit Regenradar."
 PINNED = True
 # ----------------------------------------
 

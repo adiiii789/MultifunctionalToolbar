@@ -1,13 +1,48 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Kalender"
+DESCRIPTION = "Kalender aus .ics-Dateien und Abos (z. B. Google Kalender): Wochen- und Monatsansicht, Termine anlegen und löschen."
 ICON = "📅"
 # ----------------------------------------
+
+# Werkzeuge für den KI-Assistenten (siehe plugin_tools.py im Toolbar-Ordner). Ohne "window":
+# Die Termine liegen in den .ics-Dateien, dafür muss der Kalender nicht offen sein.
+# Löschen bietet er bewusst nicht an (eine Webseite könnte das Modell sonst dazu überreden).
+ASSISTANT_TOOLS = {
+    "calendar_list_events": {
+        "description": "Lists the user's calendar appointments in a date range (recurring ones and "
+                       "subscribed calendars such as Google Calendar included).",
+        "parameters": {
+            "start_date": {"type": "string", "description": "First day, YYYY-MM-DD (default: today)"},
+            "days": {"type": "integer", "description": "Number of days from start_date (default: 7)"},
+        },
+    },
+    "calendar_add_event": {
+        "description": "Adds an appointment to the user's calendar. Use the current date from the system "
+                       "message to resolve words like 'tomorrow'.",
+        "parameters": {
+            "title": {"type": "string", "description": "Title of the appointment"},
+            "start": {"type": "string",
+                      "description": "Start as YYYY-MM-DDTHH:MM, or YYYY-MM-DD for an all-day appointment"},
+            "duration_minutes": {"type": "integer", "description": "Duration in minutes (default: 60)"},
+            "calendar": {"type": "string", "description": "Local calendar file name (optional, default: the first "
+                                                         "one). Subscribed calendars (Google ...) are read-only."},
+        },
+        "required": ["title", "start"],
+        "show": True,                       # Kalender danach zeigen, zum neuen Termin springen
+    },
+}
 
 # scripts/pro_calendar_html.py
 import os
 import json
 import sys
 import uuid  # Hinzugefügt für eindeutige Event-IDs
+import hashlib
+import re
+import threading
+import urllib.parse
+import urllib.request
+from concurrent.futures import Future
 from datetime import datetime, date, timedelta, time
 from pathlib import Path
 
@@ -16,7 +51,7 @@ from dateutil.rrule import rrulestr, rruleset
 from icalendar import Calendar, Event  # Hinzugefügt, um Events zu erstellen
 from icalendar.prop import vDDDTypes
 
-from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QEvent, QDateTime, pyqtSlot, QObject
+from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QEvent, QDateTime, pyqtSlot, QObject, QTimer
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QFileDialog, QListWidget, QListWidgetItem, QLabel, QAbstractItemView,
@@ -108,6 +143,8 @@ class HostThemeWatcher(QObject):
 # Haupt-Widget
 # ===========================
 class PluginWidget(QMainWindow):
+    subscriptionsUpdated = pyqtSignal(bool)     # aus dem Download-Thread: hat sich etwas geändert?
+
     def __init__(self, theme="dark", mode="Window"):
         super().__init__()
         self.setWindowTitle("📅 Kalender")
@@ -138,6 +175,9 @@ class PluginWidget(QMainWindow):
             # ---------------------------------
 
             self.btn_add = QPushButton("ICS hinzufügen")
+            self.btn_subscribe = QPushButton("Abo (URL)")
+            self.btn_subscribe.setToolTip("Kalender per iCal-Adresse abonnieren (z. B. Google Kalender),\n"
+                                          "aktualisiert sich selbst, schreibgeschützt")
             self.btn_remove = QPushButton("Entfernen")
             self.btn_week = QPushButton("Woche")
             self.btn_2weeks = QPushButton("2 Wochen")
@@ -153,6 +193,7 @@ class PluginWidget(QMainWindow):
             bar_l.addSpacing(15)
             # ----------------------------------------
             bar_l.addWidget(self.btn_add)
+            bar_l.addWidget(self.btn_subscribe)
             bar_l.addWidget(self.btn_remove)
             bar_l.addStretch(1)
             bar_l.addWidget(self.btn_day)
@@ -184,6 +225,7 @@ class PluginWidget(QMainWindow):
             self.btn_new_cal.clicked.connect(self.create_new_calendar)
             # ---------------------------------
             self.btn_add.clicked.connect(self.add_ics_dialog)
+            self.btn_subscribe.clicked.connect(self.add_subscription_dialog)
             self.btn_remove.clicked.connect(self.remove_selected)
             self.btn_week.clicked.connect(lambda: self.render(mode="week"))
             self.btn_2weeks.clicked.connect(lambda: self.render(mode="two_weeks"))
@@ -216,6 +258,15 @@ class PluginWidget(QMainWindow):
             self._theme_watcher.themeChanged.connect(self._on_host_theme_changed)
             self.destroyed.connect(self._cleanup_theme_watcher)
 
+        # Abos: beim Öffnen und danach regelmäßig im Hintergrund neu laden
+        self._sync_running = False
+        self._sync_again = False
+        self._new_subscriptions = set()         # gerade hinzugefügt: Fehler direkt melden
+        self.subscriptionsUpdated.connect(self._on_subscriptions_updated)
+        self._sync_timer = QTimer(self)
+        self._sync_timer.timeout.connect(lambda: self._start_subscription_sync(0))
+        self._sync_timer.start(SUBSCRIPTION_REFRESH_MIN * 60 * 1000)
+
         # Initial
         if self.mode == "Window":
             self._refresh_calendar_list()
@@ -224,6 +275,7 @@ class PluginWidget(QMainWindow):
         else:
             # popup -> directly day compact
             self.render(mode="day")
+        self._start_subscription_sync(SUBSCRIPTION_OPEN_MAX_AGE_S)
 
     def _on_host_theme_changed(self, theme: str):
         """Wird aufgerufen, wenn sich das Theme im Launcher ändert."""
@@ -280,6 +332,10 @@ class PluginWidget(QMainWindow):
         Bei wiederkehrenden Terminen wird nur der einzelne Termin gelöscht (EXDATE hinzufügen),
         bei nicht-wiederkehrenden Terminen wird das gesamte Event gelöscht.
         """
+        if is_subscription(calendar_path):
+            self.show_error_message("Schreibgeschützt", "Termine aus einem Abo lassen sich nur im Original "
+                                                        "(z. B. Google Kalender) löschen.")
+            return False
         try:
             # Pfad normalisieren
             cal_path = Path(calendar_path)
@@ -419,7 +475,7 @@ class PluginWidget(QMainWindow):
             full = Path(p)
             if not full.is_absolute():
                 full = _script_dir() / p
-            if full.exists() and not str(p).lower().startswith("http"):
+            if not is_subscription(p) and full.exists():
                 writeable_calendars.append(p)
 
         if not writeable_calendars:
@@ -659,54 +715,136 @@ class PluginWidget(QMainWindow):
     def _refresh_calendar_list_day(self):
         if self.mode != "Window":
             return
-        self.list_widget_day.clear()
-        for path in self.ics_files:
-            full = Path(path)
-            if not full.is_absolute():
-                full = _script_dir() / full
-            if not full.exists():
-                continue
-            item = QListWidgetItem(full.name)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            item.setCheckState(Qt.Checked)
-            item.setData(Qt.UserRole, str(full))
-
-            self.list_widget_day.addItem(item)
+        self._fill_calendar_list(self.list_widget_day)
 
     def _refresh_calendar_list(self):
         if self.mode != "Window":
             return
-        self.list_widget.clear()
+        self._fill_calendar_list(self.list_widget)
+
+    def _fill_calendar_list(self, list_widget):
+        list_widget.blockSignals(True)          # sonst rendert jedes neue Häkchen
+        list_widget.clear()
         for path in self.ics_files:
-            full = Path(path)
-            if not full.is_absolute():
-                full = _script_dir() / full
-            if not full.exists():
-                continue
-            item = QListWidgetItem(full.name)
+            if is_subscription(path):           # Abo: auch ohne Zwischenspeicher zeigen (lädt noch)
+                item = QListWidgetItem()
+                entry = path
+            else:
+                full = Path(path)
+                if not full.is_absolute():
+                    full = _script_dir() / full
+                if not full.exists():
+                    continue
+                item = QListWidgetItem(full.name)
+                entry = str(full)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             item.setCheckState(Qt.Checked)
-            item.setData(Qt.UserRole, str(full))
-            self.list_widget.addItem(item)
+            item.setData(Qt.UserRole, entry)
+            list_widget.addItem(item)
+        list_widget.blockSignals(False)
+        self._update_subscription_items()
+
+    def _update_subscription_items(self):
+        """Name und Stand der Abos in den Listen nachtragen (Häkchen bleiben, wie sie sind)."""
+        if self.mode != "Window":
+            return
+        for list_widget in (self.list_widget, self.list_widget_day):
+            list_widget.blockSignals(True)
+            for i in range(list_widget.count()):
+                item = list_widget.item(i)
+                entry = item.data(Qt.UserRole)
+                if is_subscription(entry):
+                    item.setText(f"🌐 {calendar_label(entry)}  (Abo)")
+                    host = urllib.parse.urlsplit(_download_url(entry)).hostname or ""
+                    item.setToolTip(f"{host} · schreibgeschützt\n{subscription_status(entry)}")
+            list_widget.blockSignals(False)
 
     def add_ics_paths(self, paths):
         changed = False
         current = set(self.ics_files)
+        added_subscriptions = []
         for p in paths:
-            if p and p not in current and os.path.isfile(p):
-                self.ics_files.append(p)
-                changed = True
+            p = (p or "").strip()
+            if not p or p in current:
+                continue
+            if is_subscription(p):
+                added_subscriptions.append(p)
+            elif not os.path.isfile(p):
+                continue
+            self.ics_files.append(p)
+            current.add(p)
+            changed = True
         if changed:
             save_config(self.ics_files)
             if self.mode == "Window":
                 self._refresh_calendar_list()
                 self._refresh_calendar_list_day()
             self.render()
+        if added_subscriptions:
+            self._new_subscriptions.update(added_subscriptions)
+            self._start_subscription_sync(0)
 
     def add_ics_dialog(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "ICS-Dateien auswählen", "", "Kalender (*.ics)")
         if paths:
             self.add_ics_paths(paths)
+
+    def add_subscription_dialog(self):
+        url, ok = QInputDialog.getText(
+            self, "Kalender abonnieren",
+            "iCal-Adresse des Kalenders (https://… oder webcal://…).\n\n"
+            "Google Kalender: Einstellungen › links den Kalender wählen › Kalender integrieren ›\n"
+            "„Privatadresse im iCal-Format“ (endet auf .ics). Die Adresse ist wie ein Passwort -\n"
+            "sie bleibt nur lokal in calendar_config.json.\n\n"
+            "Der Kalender wird beim Öffnen und alle %d Minuten aktualisiert und ist hier schreibgeschützt."
+            % SUBSCRIPTION_REFRESH_MIN,
+            QLineEdit.Normal, "")
+        url = (url or "").strip()
+        if not ok or not url:
+            return
+        if not is_subscription(url):
+            self.show_error_message("Keine Adresse", "Die Adresse muss mit https://, http:// oder webcal:// beginnen.")
+            return
+        if url in self.ics_files:
+            self.show_error_message("Schon abonniert", "Dieser Kalender ist bereits eingebunden.")
+            return
+        self.add_ics_paths([url])
+
+    def _start_subscription_sync(self, max_age_s: float):
+        """Abos im Hintergrund laden; danach kommt subscriptionsUpdated im Hauptthread an."""
+        entries = [e for e in self.ics_files if is_subscription(e)]
+        if not entries:
+            return
+        if self._sync_running:                  # läuft schon: danach noch einmal (neues Abo)
+            self._sync_again = True
+            return
+        self._sync_running = True
+
+        def work():
+            changed = refresh_subscriptions(entries, max_age_s)
+            try:
+                self.subscriptionsUpdated.emit(changed)
+            except RuntimeError:                # Fenster inzwischen geschlossen
+                pass
+
+        threading.Thread(target=work, name="kalender-abos", daemon=True).start()
+
+    def _on_subscriptions_updated(self, changed: bool):
+        self._sync_running = False
+        self._update_subscription_items()
+        failed = [e for e in self._new_subscriptions if subscription_status(e).startswith("Fehler")]
+        loaded = [e for e in self._new_subscriptions if e not in failed and subscription_cache(e).exists()]
+        self._new_subscriptions.difference_update(failed + loaded)
+        if changed or loaded:
+            self.render()
+        if failed:
+            self.show_error_message("Abo nicht geladen",
+                                    "\n\n".join(subscription_status(e) for e in failed) +
+                                    "\n\nDas Abo bleibt eingetragen und wird später erneut versucht "
+                                    "(oder mit „Entfernen“ löschen).")
+        if self._sync_again:
+            self._sync_again = False
+            self._start_subscription_sync(0)
 
     def remove_selected(self):
         if self.mode != "Window":
@@ -717,6 +855,9 @@ class PluginWidget(QMainWindow):
             return
         to_remove = {it.data(Qt.UserRole) for it in selected}
         self.ics_files = [p for p in self.ics_files if p not in to_remove]
+        for entry in to_remove:                 # Zwischenspeicher eines Abos mit wegräumen
+            if is_subscription(entry):
+                subscription_cache(entry).unlink(missing_ok=True)
         save_config(self.ics_files)
         self._refresh_calendar_list()
         self._refresh_calendar_list_day()
@@ -753,8 +894,12 @@ class PluginWidget(QMainWindow):
 
         for i, path in enumerate(calendars):
             color = PALETTE[i % len(PALETTE)]
+            # Abos: aus dem Zwischenspeicher lesen, schreibgeschützt (kein Pfad -> kein Löschen im JS)
+            readonly = is_subscription(path)
+            label = calendar_label(path)
+            event_path = "" if readonly else path
             try:
-                with open(path, "rb") as f:
+                with open(calendar_file(path), "rb") as f:
                     cal = Calendar.from_ical(f.read())
 
                 masters = []
@@ -872,10 +1017,11 @@ class PluginWidget(QMainWindow):
                                     "start": o_start.isoformat(),
                                     "end": o_end.isoformat(),
                                     "allDay": bool(o_all_day),
-                                    "calendar": os.path.basename(path),
+                                    "calendar": label,
                                     "color": color,
-                                    "path": path,
-                                    "uid": uid
+                                    "path": event_path,
+                                    "uid": uid,
+                                    "readonly": readonly
                                 })
                             else:
                                 occ_end = occ_start + duration
@@ -886,10 +1032,11 @@ class PluginWidget(QMainWindow):
                                     "start": occ_start.isoformat(),
                                     "end": occ_end.isoformat(),
                                     "allDay": bool(all_day_base),
-                                    "calendar": os.path.basename(path),
+                                    "calendar": label,
                                     "color": color,
-                                    "path": path,
-                                    "uid": uid
+                                    "path": event_path,
+                                    "uid": uid,
+                                    "readonly": readonly
                                 })
                     else:
                         if end_base <= start_base:
@@ -899,10 +1046,11 @@ class PluginWidget(QMainWindow):
                             "start": start_base.isoformat(),
                             "end": end_base.isoformat(),
                             "allDay": bool(all_day_base),
-                            "calendar": os.path.basename(path),
+                            "calendar": label,
                             "color": color,
-                            "path": path,
-                            "uid": uid
+                            "path": event_path,
+                            "uid": uid,
+                            "readonly": readonly
                         })
 
             except Exception:
@@ -910,6 +1058,23 @@ class PluginWidget(QMainWindow):
 
         evs.sort(key=lambda e: (e["start"], e["end"]))
         return evs
+
+    def on_assistant_change(self, tool, args, result):
+        """Der Assistent hat etwas geändert (assistant_call unten) - offenes Fenster nachziehen."""
+        if tool != "calendar_add_event":
+            return
+        configured = load_config()
+        if configured != self.ics_files:         # neuer Kalender angelegt
+            self.ics_files = configured
+            self._refresh_calendar_list()
+            self._refresh_calendar_list_day()
+        if self.mode != "Window":
+            self.render()
+            return
+        # Zur Woche des neuen Termins springen und ihn hervorheben (_build_html liest das einmal)
+        self._assistant_focus = (str(result.get("start", ""))[:10], result.get("uid", ""))
+        last = getattr(self, "_last_mode", "week")
+        self.render("week" if last == "day" else last)
 
     def render(self, mode: str = None):
         if mode is None:
@@ -944,18 +1109,23 @@ class PluginWidget(QMainWindow):
             self.list_widget_day.setVisible(False)
 
             events = self.load_events()
+            focus = getattr(self, "_assistant_focus", None)     # Termin vom Assistenten (on_assistant_change)
+            try:
+                ref = date.fromisoformat(focus[0]) if focus else date.today()
+            except ValueError:
+                ref = date.today()
             if mode == "week":
-                mo, su = current_week_range()
-                self.title_label.setText(f"Aktuelle Woche · {mo.strftime('%d.%m.%Y')} – {su.strftime('%d.%m.%Y')}")
+                mo, su = current_week_range(ref)
+                label = "Aktuelle Woche" if ref == date.today() else "Woche"
+                self.title_label.setText(f"{label} · {mo.strftime('%d.%m.%Y')} – {su.strftime('%d.%m.%Y')}")
             elif mode == "two_weeks":
-                mo, su = current_week_range()
-                nmo, nsu = next_week_range()
+                mo, su = current_week_range(ref)
+                nmo, nsu = next_week_range(ref)
                 self.title_label.setText(
                     f"Woche + nächste · {mo.strftime('%d.%m')}–{su.strftime('%d.%m')} & {nmo.strftime('%d.%m')}–{nsu.strftime('%d.%m')}"
                 )
             else:
-                today = date.today()
-                self.title_label.setText(today.strftime("Monat · %B %Y"))
+                self.title_label.setText(ref.strftime("Monat · %B %Y"))
 
             html = self._build_html(events, mode)
             self.web.setHtml(html, baseUrl=QUrl.fromLocalFile(str(_script_dir())))
@@ -963,13 +1133,16 @@ class PluginWidget(QMainWindow):
     def _build_html(self, events, mode):
         events_json = json.dumps(events, ensure_ascii=False)
         today_iso = date.today().isoformat()
+        focus_iso, highlight_uid = getattr(self, "_assistant_focus", None) or (today_iso, "")
+        self._assistant_focus = None
 
         html = WINDOW_HTML_TEMPLATE
-        html = html.replace("__EVENTS__", events_json)
         html = html.replace("__MODE__", mode)
+        html = html.replace("__FOCUS__", focus_iso or today_iso)
+        html = html.replace("__HIGHLIGHT__", highlight_uid)
         html = html.replace("__TODAY__", today_iso)
         html = html.replace("__THEME__", self._current_theme)
-        return html
+        return html.replace("__EVENTS__", _script_json(events_json))     # zuletzt: Titel sind fremder Text
 
     def _build_day_compact_html(self, events, today_date: date):
         js_events = []
@@ -989,13 +1162,14 @@ class PluginWidget(QMainWindow):
                 "allDay": ev.get("allDay", False),
                 "uid": ev.get("uid", ""),
                 "path": ev.get("path", ""),
+                "readonly": ev.get("readonly", False),
             })
 
         events_json = json.dumps(js_events, ensure_ascii=False)
 
         html = DAY_HTML_TEMPLATE
-        html = html.replace("__EVENTS__", events_json)
         html = html.replace("__THEME__", self._current_theme)
+        html = html.replace("__EVENTS__", _script_json(events_json))
         # WebChannel auch für Day-View einrichten
         if hasattr(self, 'channel'):
             # Channel ist bereits eingerichtet
@@ -1036,6 +1210,9 @@ def load_config() -> list:
 
             norm_paths = []
             for path in data:
+                if is_subscription(path):           # Abo-Adresse, kein Dateipfad
+                    norm_paths.append(path)
+                    continue
                 full_path = Path(path)
                 if not full_path.is_absolute():
                     full_path = _script_dir() / full_path
@@ -1050,6 +1227,115 @@ def load_config() -> list:
 def save_config(paths: list):
     p = config_path()
     p.write_text(json.dumps(paths, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ===========================
+# Abos per iCal-Adresse (z. B. Google Kalender: Einstellungen > Kalender integrieren >
+# "Privatadresse im iCal-Format"). Stehen als URL in calendar_config.json, werden in
+# SUBSCRIPTION_CACHE_DIR zwischengespeichert und sind schreibgeschützt.
+# ===========================
+SUBSCRIPTION_CACHE_DIR = "_calendar_cache"      # "_": kein Plugin-Ordner; steht in .gitignore
+SUBSCRIPTION_OPEN_MAX_AGE_S = 60                # beim Öffnen neu laden, wenn älter
+SUBSCRIPTION_REFRESH_MIN = 15                   # solange der Kalender offen ist
+SUBSCRIPTION_ASSISTANT_MAX_AGE_S = 5 * 60       # Abfrage des Assistenten
+SUBSCRIPTION_TIMEOUT_S = 20
+SUBSCRIPTION_MAX_BYTES = 20 * 1024 * 1024
+_SUBSCRIPTION_SCHEMES = ("http://", "https://", "webcal://", "webcals://")
+
+_subscription_lock = threading.Lock()           # ein Download zur Zeit, kein doppeltes Laden
+_subscription_status = {}                       # Adresse -> Text für den Tooltip
+_subscription_names = {}                        # Cache-Pfad -> (mtime, Name)
+
+
+def is_subscription(entry) -> bool:
+    return str(entry).strip().lower().startswith(_SUBSCRIPTION_SCHEMES)
+
+
+def _download_url(entry: str) -> str:
+    scheme, rest = entry.strip().split("://", 1)
+    return ("https://" + rest) if scheme.lower() in ("webcal", "webcals") else entry.strip()
+
+
+def subscription_cache(entry: str) -> Path:
+    digest = hashlib.sha256(entry.encode("utf-8")).hexdigest()[:16]
+    return _script_dir() / SUBSCRIPTION_CACHE_DIR / f"{digest}.ics"
+
+
+def calendar_file(entry: str) -> str:
+    """Datei, aus der gelesen wird: der Pfad selbst oder der Zwischenspeicher eines Abos."""
+    return str(subscription_cache(entry)) if is_subscription(entry) else entry
+
+
+def calendar_label(entry: str) -> str:
+    """Anzeigename: Dateiname, bei Abos der Kalendername aus der Datei (X-WR-CALNAME)."""
+    if not is_subscription(entry):
+        return os.path.basename(entry)
+    cache = subscription_cache(entry)
+    try:
+        mtime = cache.stat().st_mtime
+        cached = _subscription_names.get(str(cache))
+        if cached and cached[0] == mtime:
+            return cached[1]
+        with open(cache, "rb") as f:
+            head = f.read(8192).decode("utf-8", "replace")
+        match = re.search(r"^X-WR-CALNAME[^:]*:(.+)$", head, re.M)
+        name = match.group(1).strip().replace("\\,", ",")[:60] if match else ""
+    except OSError:
+        mtime, name = None, ""
+    name = name or (urllib.parse.urlsplit(_download_url(entry)).hostname or "Abo")
+    if mtime is not None:
+        _subscription_names[str(cache)] = (mtime, name)
+    return name
+
+
+def subscription_status(entry: str) -> str:
+    return _subscription_status.get(entry, "Noch nicht geladen")
+
+
+def refresh_subscription(entry: str, max_age_s: float = 0) -> bool:
+    """Lädt ein Abo neu, wenn der Zwischenspeicher älter als max_age_s ist.
+    True, wenn sich der Inhalt geändert hat. Fehler landen in subscription_status,
+    der alte Stand bleibt dann erhalten. Läuft in einem Hintergrund-Thread."""
+    cache = subscription_cache(entry)
+    with _subscription_lock:
+        try:
+            if max_age_s and cache.exists() and datetime.now().timestamp() - cache.stat().st_mtime < max_age_s:
+                return False
+            request = urllib.request.Request(_download_url(entry),
+                                             headers={"User-Agent": "MultifunctionalToolbar-Kalender"})
+            with urllib.request.urlopen(request, timeout=SUBSCRIPTION_TIMEOUT_S) as response:
+                data = response.read(SUBSCRIPTION_MAX_BYTES + 1)
+            if len(data) > SUBSCRIPTION_MAX_BYTES:
+                raise ValueError("Kalender ist größer als 20 MB")
+            if b"BEGIN:VCALENDAR" not in data[:4096]:
+                raise ValueError("Keine iCal-Daten - ist die Adresse richtig (bei Google: iCal-Adresse)?")
+            Calendar.from_ical(data)                # kaputte Datei nicht übernehmen
+            changed = not cache.exists() or cache.read_bytes() != data
+            cache.parent.mkdir(exist_ok=True)
+            temp = cache.with_suffix(f".{threading.get_ident()}.tmp")    # Modul kann doppelt geladen sein
+            temp.write_bytes(data)
+            os.replace(temp, cache)                 # auch unverändert: mtime = letzter Abruf
+            _subscription_status[entry] = f"Aktualisiert {datetime.now():%H:%M}"
+            return changed
+        except Exception as error:  # noqa: BLE001  # Netz, Server, Format - alter Stand bleibt
+            stand = (f" - zeige Stand von {datetime.fromtimestamp(cache.stat().st_mtime):%d.%m. %H:%M}"
+                     if cache.exists() else "")
+            _subscription_status[entry] = f"Fehler beim Laden: {error}{stand}"
+            print(f"[Kalender] Abo nicht geladen ({urllib.parse.urlsplit(_download_url(entry)).hostname}): {error}")
+            return False
+
+
+def refresh_subscriptions(entries, max_age_s: float = 0) -> bool:
+    changed = False
+    for entry in entries:
+        if is_subscription(entry):
+            changed = refresh_subscription(entry, max_age_s) or changed
+    return changed
+
+
+def _script_json(text: str) -> str:
+    """JSON für einen <script>-Block: "</script>" in fremden Termintiteln darf ihn nicht beenden."""
+    return text.replace("</", "<\\/")
 
 
 # ===========================
@@ -1125,25 +1411,7 @@ class DropListWidget(QListWidget):
         return super().eventFilter(obj, e)
 
     def _has_ics(self, mime):
-        if mime.hasUrls():
-            for u in mime.urls():
-                p = u.toLocalFile()
-
-                if p and p.lower().endswith(".ics"):
-                    return True
-        if mime.hasText():
-            for line in mime.text().splitlines():
-                s = line.strip()
-                if s.startswith("file://"):
-
-                    try:
-                        p = QUrl(s).toLocalFile()
-                        if p and p.lower().endswith(".ics"):
-                            return True
-
-                    except Exception:
-                        pass
-        return False
+        return bool(self._extract_paths(mime))
 
     def _extract_paths(self, mime):
         paths = []
@@ -1153,6 +1421,8 @@ class DropListWidget(QListWidget):
                 p = u.toLocalFile()
                 if p and p.lower().endswith(".ics"):
                     paths.append(p)
+                elif not u.isLocalFile() and is_subscription(u.toString()):    # Link aus dem Browser: Abo
+                    paths.append(u.toString())
         if not paths and mime.hasText():
             for line in mime.text().splitlines():
                 s = line.strip()
@@ -1161,6 +1431,8 @@ class DropListWidget(QListWidget):
                     p = QUrl(s).toLocalFile()
                     if p and p.lower().endswith(".ics"):
                         paths.append(p)
+                elif is_subscription(s):
+                    paths.append(s)
         # de-dupe
         return list(dict.fromkeys(paths))
 
@@ -1258,6 +1530,13 @@ WINDOW_HTML_TEMPLATE = r"""<!DOCTYPE html>
         color: var(--today-border);
     }
     /* --- */
+    /* Vom KI-Assistenten gerade eingetragener Termin */
+    .event.assistant-new {
+        outline: 2px solid var(--today-border);
+        outline-offset: 1px;
+        animation: assistant-new 1s ease-in-out 3;
+    }
+    @keyframes assistant-new { 50% { outline-color: transparent; } }
 
     .date-num { font-size: 1em; font-weight: 700; color: var(--muted); margin-bottom: 6px; flex-shrink: 0; }
     .events { flex: 1 1 auto; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
@@ -1302,7 +1581,8 @@ WINDOW_HTML_TEMPLATE = r"""<!DOCTYPE html>
   <script>
   const EVENTS_JSON = __EVENTS__;
   let currentMode = "__MODE__"; // "week" | "two_weeks" | "month"
-  let currentDate = new Date("__TODAY__");
+  let currentDate = new Date("__FOCUS__");   // heute, oder der Tag eines vom Assistenten eingetragenen Termins
+  const HIGHLIGHT_UID = "__HIGHLIGHT__";
   // NEU: Referenz für "Heute"
   const todayDate = new Date("__TODAY__");
   todayDate.setHours(0,0,0,0);
@@ -1361,7 +1641,10 @@ WINDOW_HTML_TEMPLATE = r"""<!DOCTYPE html>
     Object.entries(byCalendar).forEach(([cal, color])=>{
       const item = document.createElement("div");
       item.className = "legend-item";
-      item.innerHTML = `<span class="legend-color" style="background:${color}"></span> ${cal}`;
+      const swatch = document.createElement("span");      // Name kann aus einem Abo stammen: kein innerHTML
+      swatch.className = "legend-color";
+      swatch.style.background = color;
+      item.append(swatch, " " + cal);
       legend.appendChild(item);
     });
   }
@@ -1456,7 +1739,8 @@ WINDOW_HTML_TEMPLATE = r"""<!DOCTYPE html>
       el.className = "event";
       el.style.background = ev.color;
       el.style.cursor = "pointer";
-      el.title = "Rechtsklick zum Löschen";
+      el.title = ev.readonly ? "Abo-Kalender (schreibgeschützt)" : "Rechtsklick zum Löschen";
+      if (HIGHLIGHT_UID && ev.uid === HIGHLIGHT_UID) el.classList.add("assistant-new");
 
       if(ev.allDay){
         el.textContent = ev.title;
@@ -1665,7 +1949,7 @@ DAY_HTML_TEMPLATE = """<!DOCTYPE html>
           span.className = "all-day-event";
           span.textContent = ev.title;
           span.style.cursor = "pointer";
-          span.title = "Rechtsklick zum Löschen";
+          span.title = ev.readonly ? "Abo-Kalender (schreibgeschützt)" : "Rechtsklick zum Löschen";
           span.addEventListener("contextmenu", function(e) {
             e.preventDefault();
             if (calendarAPI && ev.uid && ev.path) {
@@ -1688,11 +1972,12 @@ DAY_HTML_TEMPLATE = """<!DOCTYPE html>
           div.style.height = height + "px";
           div.style.background = ev.color;
           div.style.cursor = "pointer";
-          div.title = "Rechtsklick zum Löschen";
-          div.innerHTML = ev.title + "<br>" +
-                          String(ev.startH).padStart(2,"0") + ":" + String(ev.startM).padStart(2,"0") +
-                          " - " +
-                          String(ev.endH).padStart(2,"0") + ":" + String(ev.endM).padStart(2,"0");
+          div.title = ev.readonly ? "Abo-Kalender (schreibgeschützt)" : "Rechtsklick zum Löschen";
+          // textContent statt innerHTML: Titel aus Abo-Kalendern sind fremder Inhalt
+          div.append(ev.title, document.createElement("br"),
+                     String(ev.startH).padStart(2,"0") + ":" + String(ev.startM).padStart(2,"0") +
+                     " - " +
+                     String(ev.endH).padStart(2,"0") + ":" + String(ev.endM).padStart(2,"0"));
           div.addEventListener("contextmenu", function(e) {
             e.preventDefault();
             if (calendarAPI && ev.uid && ev.path) {
@@ -1727,3 +2012,115 @@ if __name__ == "__main__":
     w = PluginWidget(mode=mode)
     w.show()
     sys.exit(app.exec_())
+
+
+# ===========================
+# KI-Assistent (ASSISTANT_TOOLS oben, plugin_tools.py)
+# ===========================
+ASSISTANT_DEFAULT_CALENDAR = "Kalender.ics"     # wird angelegt, wenn noch keiner eingebunden ist
+ASSISTANT_MAX_EVENTS = 50
+
+
+def assistant_call(tool, args):
+    if tool == "calendar_list_events":
+        return _assistant_list_events(args)
+    if tool == "calendar_add_event":
+        return _assistant_add_event(args)
+    raise ValueError(f"Unknown tool: {tool}")
+
+
+def _assistant_list_events(args):
+    first = date.fromisoformat(args["start_date"]) if args.get("start_date") else date.today()
+    days = max(1, min(int(args.get("days") or 7), 366))
+    start, end = datetime.combine(first, time.min), datetime.combine(first + timedelta(days=days), time.min)
+    calendars = [path for path in load_config() if is_subscription(path) or Path(path).exists()]
+    if not calendars:
+        return {"events": [], "note": "No calendar file is set up yet."}
+
+    def collect():
+        # Dieselbe Leselogik wie im Fenster (inkl. Serienterminen) - braucht vom Fenster nur die Pfade
+        events = [ev for ev in PluginWidget.load_events(None, calendars)
+                  if datetime.fromisoformat(ev["end"]) > start and datetime.fromisoformat(ev["start"]) < end]
+        result = {"from": first.isoformat(), "days": days,
+                  "events": [{"title": ev["title"], "start": ev["start"], "end": ev["end"],
+                              "all_day": ev["allDay"], "calendar": ev["calendar"]}
+                             for ev in events[:ASSISTANT_MAX_EVENTS]]}
+        failed = [calendar_label(c) for c in calendars
+                  if is_subscription(c) and subscription_status(c).startswith("Fehler")]
+        if failed:
+            result["note"] = "Could not refresh subscribed calendar(s) " + ", ".join(failed) + "; showing the last saved state."
+        return result
+
+    stale = [c for c in calendars if is_subscription(c) and _subscription_age_s(c) > SUBSCRIPTION_ASSISTANT_MAX_AGE_S]
+    if not stale:
+        return collect()
+    # Abos erst neu laden - im Hintergrund, der Launcher wartet auf das Future (Hauptthread bleibt frei)
+    future = Future()
+
+    def work():
+        try:
+            refresh_subscriptions(stale, SUBSCRIPTION_ASSISTANT_MAX_AGE_S)
+            future.set_result(collect())
+        except Exception as error:  # noqa: BLE001
+            future.set_exception(error)
+
+    threading.Thread(target=work, name="kalender-abos-assistent", daemon=True).start()
+    return future
+
+
+def _subscription_age_s(entry) -> float:
+    try:
+        return datetime.now().timestamp() - subscription_cache(entry).stat().st_mtime
+    except OSError:
+        return float("inf")
+
+
+def _assistant_add_event(args):
+    title = str(args.get("title") or "").strip()
+    if not title:
+        raise ValueError("The appointment needs a title.")
+    start_text = str(args.get("start") or "").strip()
+    all_day = len(start_text) == 10                 # nur Datum
+    try:
+        start = date.fromisoformat(start_text) if all_day else datetime.fromisoformat(start_text)
+    except ValueError:
+        raise ValueError("start must look like 2026-10-22T14:00 or 2026-10-22.") from None
+    if isinstance(start, datetime) and start.tzinfo is not None:
+        start = ensure_datetime(start)
+    end = start + (timedelta(days=1) if all_day else timedelta(minutes=int(args.get("duration_minutes") or 60)))
+
+    # Nur lokale Dateien - Abos (Google ...) sind schreibgeschützt
+    calendars = [path for path in load_config() if not is_subscription(path) and Path(path).exists()]
+    created = False
+    if not calendars:                               # noch kein lokaler Kalender: einen anlegen und eintragen
+        new_path = _script_dir() / ASSISTANT_DEFAULT_CALENDAR
+        if not new_path.exists():
+            cal = Calendar()
+            cal.add("prodid", "-//Pro Calendar Plugin//")
+            cal.add("version", "2.0")
+            new_path.write_bytes(cal.to_ical())
+        save_config([p for p in load_config() if p != str(new_path)] + [str(new_path)])   # Abos behalten
+        calendars, created = [str(new_path)], True
+    wanted = str(args.get("calendar") or "").strip().lower()
+    target = next((c for c in calendars if Path(c).name.lower() in (wanted, wanted + ".ics")), calendars[0])
+
+    cal_path = Path(target)
+    try:
+        cal = Calendar.from_ical(cal_path.read_bytes())
+    except Exception:
+        cal = Calendar()
+        cal.add("prodid", "-//Pro Calendar Plugin//")
+        cal.add("version", "2.0")
+    event = Event()
+    event.add("summary", title)
+    event.add("dtstart", start)
+    event.add("dtend", end)
+    event.add("dtstamp", datetime.now())
+    event.add("uid", str(uuid.uuid4()))
+    cal.add_component(event)
+    cal_path.write_bytes(cal.to_ical())
+    result = {"added": title, "start": start.isoformat(), "end": end.isoformat(), "calendar": cal_path.name,
+              "uid": str(event["uid"])}     # für die Hervorhebung im Fenster (on_assistant_change)
+    if created:
+        result["note"] = f"No calendar was set up, so {cal_path.name} was created."
+    return result

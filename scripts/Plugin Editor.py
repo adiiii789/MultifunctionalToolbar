@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Plugin Editor"
+DESCRIPTION = "Editor zum Erstellen und Bearbeiten von Toolbar-Plugins mit Live-Vorschau."
 ICON = "🛠️"
 ALLOW_POPUP = False
 # ----------------------------------------
@@ -97,7 +98,7 @@ class EditorBridge(QObject):
             tree = _ast.parse(src)
         except SyntaxError as e:
             return {"ok": False, "error": "Parse-Fehler: " + str(e)}
-        known = {"NAME", "ICON", "HTML_BUTTON", "BUTTON_HEIGHT", "OPACITY",
+        known = {"NAME", "ICON", "DESCRIPTION", "HTML_BUTTON", "BUTTON_HEIGHT", "OPACITY",
                  "PINNED", "ALLOW_POPUP", "ALLOW_WINDOW", "RUN_AS", "MEDIA_BRIDGE",
                  "BUTTON_HTML", "WINDOW_HTML", "POPUP_HTML", "BUTTON_HTML_FILE"}
         fields = {}
@@ -355,6 +356,11 @@ EDITOR_HTML = r'''<!DOCTYPE html>
       <div class="row">
         <label>NAME</label><input type="text" id="pname" value="Mein Plugin">
         <label>ICON</label><input type="text" id="picon" value="✨" style="width:80px" title="Emoji/Text ODER Bilddatei, z. B. icon.png (relativ zur Plugin-Datei)">
+      </div>
+      <div class="row">
+        <label>BESCHREIBUNG</label><input type="text" id="pdesc" style="flex:1" placeholder="Ein Satz: was das Plugin macht (für den KI-Assistenten)">
+      </div>
+      <div class="row">
         <label>HÖHE</label><input type="number" id="pheight" placeholder="auto">
         <label>OPACITY</label><input type="number" id="popacity" min="0.1" max="1" step="0.05" value="1">
       </div>
@@ -473,6 +479,7 @@ EDITOR_HTML = r'''<!DOCTYPE html>
     L.push('# --- Plugin-Parameter (neues System) ---');
     if (el('pname').value.trim()) L.push('NAME = ' + pyStr(el('pname').value.trim()));
     if (el('picon').value.trim()) L.push('ICON = ' + pyStr(el('picon').value.trim()));
+    if (el('pdesc').value.trim()) L.push('DESCRIPTION = ' + pyStr(el('pdesc').value.trim()));
     if (t !== 'window') L.push('HTML_BUTTON = True');
     var h = parseInt(el('pheight').value, 10);
     if (h > 0) L.push('BUTTON_HEIGHT = ' + h);
@@ -724,7 +731,7 @@ EDITOR_HTML = r'''<!DOCTYPE html>
   }
 
   var deb;
-  ['fname','ptype','pname','picon','pheight','popacity','ppinned','ppopup','pwindow','prunas',
+  ['fname','ptype','pname','picon','pdesc','pheight','popacity','ppinned','ppopup','pwindow','prunas',
    'cardHtml','winHtml','popHtml','sepPopup'].forEach(function(id){
     el(id).addEventListener('input', function(){ clearTimeout(deb); deb = setTimeout(formChanged, 250); });
     el(id).addEventListener('change', function(){ clearTimeout(deb); deb = setTimeout(formChanged, 100); });
@@ -775,9 +782,10 @@ EDITOR_HTML = r'''<!DOCTYPE html>
     el('cardHtml').value = DEFAULT_CARD;
     el('winHtml').value = DEFAULT_WIN;
     el('popHtml').value = DEFAULT_POP;
-    el('pname').value = ''; el('picon').value = '';
+    el('pname').value = ''; el('picon').value = ''; el('pdesc').value = '';
     if (typeof f.NAME === 'string') el('pname').value = f.NAME;
     if (typeof f.ICON === 'string') el('picon').value = f.ICON;
+    if (typeof f.DESCRIPTION === 'string') el('pdesc').value = f.DESCRIPTION;
     el('pheight').value = (f.BUTTON_HEIGHT > 0) ? f.BUTTON_HEIGHT : '';
     el('popacity').value = (f.OPACITY > 0 && f.OPACITY < 1) ? f.OPACITY : 1;
     el('ppinned').checked = !!f.PINNED;

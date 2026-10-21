@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Notizen"
+DESCRIPTION = "Notizen schreiben, ordnen und speichern."
 ICON = "📝"
 # ----------------------------------------
 

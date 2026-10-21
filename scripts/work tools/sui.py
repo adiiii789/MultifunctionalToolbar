@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "To-Do Ultra"
+DESCRIPTION = "Erweiterte Aufgabenverwaltung (To-Do Ultra) mit Listen und Prioritäten."
 ICON = "🗂️"
 # ----------------------------------------
 

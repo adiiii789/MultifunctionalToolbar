@@ -6,6 +6,7 @@
 # =============================================================================
 HTML_BUTTON = True
 NAME = "Zähler"
+DESCRIPTION = "Demo: einfacher Zähler-Knopf, dessen Logik und Zustand ganz im Plugin liegen."
 ICON = "🔢"
 BUTTON_HEIGHT = 64
 MEDIA_BRIDGE = False  # dieser Card reicht das eigene Backend

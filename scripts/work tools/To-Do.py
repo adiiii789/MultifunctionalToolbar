@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "To-Do"
+DESCRIPTION = "Aufgabenliste zum Eintragen und Abhaken."
 ICON = "✅"
 # ----------------------------------------
 

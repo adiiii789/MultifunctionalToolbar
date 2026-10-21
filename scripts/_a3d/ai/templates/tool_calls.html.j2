@@ -1,0 +1,42 @@
+{#- Bestätigung der Werkzeugaufrufe einer Antwort (ollama_assistant._tool_view).
+    Steht auf dem ganzen Board oder - liegt dort ein Plugin - im Streifen darunter, deshalb kompakt:
+    eine Zeile je Aufruf.
+    Daten:
+      title  str          Überschrift
+      calls  list[dict]   je Aufruf: name str, arguments dict, result str, error bool
+    (rows/columns liegen für ältere Viewer ebenfalls bei, werden hier nicht gebraucht.) -#}
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <style>
+{% include "theme.css" %}
+{% include "view.css" %}
+    h2 { font-size: 1em; margin-bottom: 0.4em; }
+    ul { list-style: none; margin: 0; padding: 0; }
+    li { display: flex; align-items: baseline; padding: 0.3em 0; border-bottom: 1px solid var(--border); }
+    li > span + span { margin-left: 0.7em; }
+    .mark { font-weight: 700; color: var(--ok); }
+    .error .mark { color: var(--error); }
+    .name { font-family: Consolas, monospace; font-weight: 600; white-space: nowrap; }
+    .args { color: var(--text-muted); }
+    .args span + span::before { content: " · "; }
+    li > .result { margin-left: auto; padding-left: 0.7em; text-align: right; max-width: 45%;
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .error .result { color: var(--error); }
+  </style>
+</head>
+<body>
+  <h2>{{ title }}</h2>
+  <ul>
+    {% for call in calls %}
+    <li class="{{ 'error' if call.error else 'ok' }}">
+      <span class="mark">{{ '✗' if call.error else '✓' }}</span>
+      <span class="name">{{ call.name }}</span>
+      <span class="args">{% for key, value in call.arguments.items() %}<span>{{ key }}: {{ value }}</span>{% endfor %}</span>
+      <span class="result" title="{{ call.result }}">{{ call.result }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</body>
+</html>

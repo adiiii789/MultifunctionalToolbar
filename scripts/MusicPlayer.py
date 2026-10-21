@@ -1,6 +1,7 @@
 # --- Plugin-Parameter (neues System) ---
 HTML_BUTTON = True  # ersetzt den alten "[html]"-Dateiprefix
 NAME = "Dual UI"
+DESCRIPTION = "Mediensteuerung: zeigt den gerade laufenden Titel samt Album-Cover und steuert die Wiedergabe (Play/Pause, vor, zurück)."
 MEDIA_BRIDGE = True
 PINNED = True
 

@@ -174,18 +174,30 @@ cython_debug/
 .pypirc
 
 
-scripts/_a3d_tts/venv/
-scripts/_a3d_tts/rvc/
-scripts/_a3d_tts/models/
-scripts/_a3d_tts/logs/
-scripts/_a3d_tts/_rvc_tmp/
-scripts/_a3d_tts/_assets_keep/
-scripts/_a3d_tts/test_miku.wav
-scripts/_a3d_tts/__pycache__/
-scripts/_a3d_tts/tts_*
-scripts/_a3d_tts/cache/
+scripts/_a3d/tts/venv/
+scripts/_a3d/tts/rvc/
+scripts/_a3d/tts/models/
+scripts/_a3d/tts/logs/
+scripts/_a3d/tts/_rvc_tmp/
+scripts/_a3d/tts/_assets_keep/
+scripts/_a3d/tts/test_miku.wav
+scripts/_a3d/tts/__pycache__/
+scripts/_a3d/tts/tts_*
+scripts/_a3d/tts/cache/
 
-scripts/_a3d/tts/*
+scripts/_a3d/viewer/tts/*
 
 
 
+scripts/_a3d/ai/venv/
+scripts/_a3d/ai/data/
+scripts/_a3d/ai/logs/
+scripts/_a3d/ai/__pycache__/
+scripts/_a3d/ai/mcp_servers/.env
+# Kalender: Abo-Adressen (z. B. Google-Privatadresse) und deren Zwischenspeicher
+scripts/work tools/calendar_config.json
+scripts/work tools/_calendar_cache/
+# Protokoll der Toolbar (tray_launcher.py main)
+/logs/
+# GIF-Suche: KLIPY-API-Schlüssel (persönlich, nicht teilen)
+scripts/work tools/gifsuche_config.json

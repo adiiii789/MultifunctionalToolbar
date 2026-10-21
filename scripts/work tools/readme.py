@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "README Manager"
+DESCRIPTION = "Legt README-Dateien bzw. Dokumentations-Notizen an und verwaltet sie."
 ICON = "📖"
 # ----------------------------------------
 

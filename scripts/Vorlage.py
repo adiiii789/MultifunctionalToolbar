@@ -1,6 +1,8 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Vorlage Plugin mit Button"
 ICON = ""
+DESCRIPTION = "Vorlage für neue Plugins mit allen Parametern." # ein Satz: was das Plugin macht
+                                                               # (der KI-Assistent listet Plugins damit auf)
 PINNED = False # True oder 1,2,... für prio
 ALLOW_POPUP = False
 ALLOW_WINDOW = False
@@ -9,6 +11,26 @@ BUTTON_HEIGHT = 234 # delete = auto
 OPACITY = 0.5 # default 1
 
 RUN_AS = "process" # default widget, "browser" possible
+# ----------------------------------------
+
+# --- KI-Assistent (optional, siehe plugin_tools.py) ---------------------
+# Werkzeuge, die der Assistent aufrufen darf - einkommentieren und anpassen.
+# Ohne "window": assistant_call() auf Modul-Ebene (unten), das Fenster muss nicht offen sein.
+# Mit "window": True: PluginWidget.assistant_call(self, tool, args) - der Launcher öffnet das
+# Fenster bei Bedarf als Tab (nicht mit RUN_AS = "process"). Beschreibungen am besten Englisch.
+# "show": True zeigt das Plugin danach als Tab im Hauptfenster (für Änderungen, nicht für Abfragen).
+# ASSISTANT_TOOLS = {
+#     "beispiel_notiz": {
+#         "description": "Saves a short note in my plugin.",
+#         "parameters": {"text": {"type": "string", "description": "The note"}},
+#         "required": ["text"],
+#     },
+# }
+#
+# def assistant_call(tool, args):
+#     if tool == "beispiel_notiz":
+#         return f"Saved: {args['text']}"          # Text oder JSON-taugliches Objekt
+#     raise ValueError(f"Unknown tool: {tool}")    # Fehlermeldung geht ans Modell
 # ----------------------------------------
 import os
 from PyQt5.QtWidgets import QMainWindow, QVBoxLayout, QWidget

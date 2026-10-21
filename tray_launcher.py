@@ -23,6 +23,14 @@ Die Werte werden per AST gelesen, die Datei wird dafuer NICHT ausgefuehrt::
     POPUP_WIDTH   = 0.45                         # Popup-Breite beim Öffnen (Anteil Bildschirm oder px)
     POPUP_HEIGHT  = 0.6                          # Popup-Höhe beim Öffnen (Anteil Bildschirm oder px)
 
+Der KI-Assistent kann Plugins steuern, die oben ASSISTANT_TOOLS anlegen (Timer stellen,
+Termin eintragen ...) - Konvention und Ablauf in plugin_tools.py.
+
+Ein Plugin kann das Popup selbst oeffnen (Erinnerung, Briefing ...)::
+
+    import services
+    services.push("Mein Plugin.py", daten)   # -> PluginWidget.on_push(daten), siehe TrayApp.handle_push
+
 In .html-Dateien gehen dieselben Parameter als fuehrende Kommentare:
 ``<!-- html_button: true -->``. Der Dateiname-Prefix ``[html]`` und
 ``get_inline_html(mode)`` funktionieren weiterhin.
@@ -52,7 +60,7 @@ from collections.abc import Callable
 from typing import NamedTuple
 
 from PyQt5.QtCore import (
-    QEasingCurve, QEvent, QFileSystemWatcher, QObject, QPropertyAnimation,
+    QEasingCurve, QEvent, QFileSystemWatcher, QObject, QPoint, QPropertyAnimation,
     QRect, QSize, Qt, QTimer, QUrl, pyqtSignal, pyqtSlot,
 )
 from PyQt5.QtGui import QColor, QCursor, QGuiApplication, QIcon
@@ -317,6 +325,15 @@ except Exception as _exc:  # noqa: BLE001  # pylint: disable=broad-exception-cau
 
 MediaControlBridge = getattr(_services, "MediaControlBridge", _StubMediaBridge)
 apply_native_titlebar = getattr(_services, "apply_native_titlebar", _stub_titlebar)
+install_push_handler = getattr(_services, "install_push_handler", None)   # services.push, siehe TrayApp
+
+# Werkzeuge der Plugins für den KI-Assistenten (ASSISTANT_TOOLS, siehe plugin_tools.py)
+# noinspection PyBroadException
+try:
+    from plugin_tools import PluginToolServer
+except Exception as _exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+    log.warning("plugin_tools.py fehlt/fehlerhaft (%r) - Assistent kann keine Plugins steuern.", _exc)
+    PluginToolServer = None
 
 
 def create_services(parent: QObject) -> dict:
@@ -338,7 +355,7 @@ def apply_titlebar_theme(widget: QWidget) -> None:
 PLUGIN_META_KEYS = frozenset({
     "HTML_BUTTON", "BUTTON_HTML", "BUTTON_HTML_FILE", "BUTTON_HEIGHT", "NAME", "ICON",
     "OPACITY", "RUN_AS", "ALLOW_POPUP", "ALLOW_WINDOW", "MEDIA_BRIDGE", "PINNED",
-    "POPUP_WIDTH", "POPUP_HEIGHT",
+    "POPUP_WIDTH", "POPUP_HEIGHT", "DESCRIPTION",
 })
 _HTML_META_COMMENT = re.compile(r"<!--\s*([A-Za-z_]+)\s*[:=]\s*(.+?)\s*-->")
 
@@ -427,6 +444,7 @@ class PluginMeta:
     button_height: int | None = None
     name: str | None = None
     icon: str | None = None
+    description: str | None = None      # ein Satz: was das Plugin macht (Assistent: toolbar_list_plugins)
     opacity: float | None = None
     run_as: str = "widget"
     allow_popup: bool = True
@@ -456,6 +474,7 @@ class PluginMeta:
             button_height=_positive_int(raw.get("BUTTON_HEIGHT")),
             name=_text(raw.get("NAME")),
             icon=_text(raw.get("ICON")),
+            description=_text(raw.get("DESCRIPTION")),
             opacity=_opacity(raw.get("OPACITY")),
             run_as=str(raw.get("RUN_AS") or "widget").lower(),
             allow_popup=_flag(raw.get("ALLOW_POPUP"), True),
@@ -1715,7 +1734,8 @@ class PopupWindow(ExplorerMixin, QWidget):
                 size_display="inline-block" if self.plugin_size else "none",
                 size_label="⇤ Schmal" if self.plugin_size_active else "⇔ Breit"))
 
-    def show_plugin_widget(self, widget: QWidget, title: str = "", meta: PluginMeta | None = None) -> None:
+    def show_plugin_widget(self, widget: QWidget, title: str = "", meta: PluginMeta | None = None,
+                           path: str = "") -> None:
         # Größen-Knopf "⇔ Breit" neben "← Explorer": Plugins mit POPUP_WIDTH/-HEIGHT
         # nutzen ihre eigene Größe, alle anderen POPUP_WIDE_SIZE.
         if meta is not None and (meta.popup_width or meta.popup_height):
@@ -1725,6 +1745,8 @@ class PopupWindow(ExplorerMixin, QWidget):
         self.plugin_size_active = False  # schmal starten, "⇔ Breit" vergrößert
         self.build_toolbar()
         container = QWidget()
+        container.setProperty("plugin_path", path)
+        container.plugin_widget = widget    # für push (open_plugin)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(8, 8, 8, 8)
         header = QLabel(f"Plugin: {title}")
@@ -1734,6 +1756,20 @@ class PopupWindow(ExplorerMixin, QWidget):
         self.pages.addWidget(container)
         self.pages.setCurrentWidget(container)
         self.toolbar.setVisible(WEBENGINE_AVAILABLE)
+
+    def open_plugin(self, path: str, factory: Callable) -> QWidget | None:
+        """Plugin im Popup zeigen und sein PluginWidget zurückgeben (für push). Ist es schon
+        offen, bleibt es samt Zustand; ein anderes offenes Plugin wird geschlossen."""
+        page = self.pages.currentWidget()
+        if page is not self.explorer_root and page.property("plugin_path") == path:
+            return page.plugin_widget
+        widget = factory(path, "Popup", self)
+        if widget is None:
+            return None
+        self._close_active_page()
+        meta = PluginMeta.from_file(path)
+        self.show_plugin_widget(widget, meta.tab_title(path), meta, path)
+        return widget
 
     def show_explorer(self) -> None:
         self._close_active_page()
@@ -1799,14 +1835,26 @@ class PopupWindow(ExplorerMixin, QWidget):
         return (min(_size_to_px(width, area.width(), default_w), area.width()),
                 min(_size_to_px(height, area.height(), default_h), area.height()))
 
-    def show_popup(self) -> None:
+    def show_popup(self, anchor: QPoint | None = None) -> None:
+        """Einblenden: untere rechte Ecke am Mauszeiger (Rechtsklick aufs Tray-Icon)
+        oder an anchor (push - dann innerhalb des Bildschirms gehalten)."""
+        if anchor is not None and self.isVisible():
+            # schon offen (push): nur die Größe zum Plugin passend machen und nach vorne holen
+            self.resize_keeping_corner(*(self.plugin_size if self.plugin_size_active else (None, None)))
+            self.raise_()
+            self.activateWindow()
+            return
         self.refresh_styles()
         self.width_size, self.height_size = self._wanted_size()
         self.setFixedSize(self.width_size, self.height_size)
-        cursor = QCursor.pos()
-        end = QRect(cursor.x() - self.width_size, cursor.y() - self.height_size,
+        point = anchor or QCursor.pos()
+        end = QRect(point.x() - self.width_size, point.y() - self.height_size,
                     self.width_size, self.height_size)
-        start = QRect(cursor.x(), cursor.y() + self.SLIDE_IN_OFFSET, self.width_size, self.height_size)
+        if anchor is not None:
+            area = (QGuiApplication.screenAt(anchor) or QGuiApplication.primaryScreen()).availableGeometry()
+            end.moveTo(max(area.left(), min(end.x(), area.right() - end.width() + 1)),
+                       max(area.top(), min(end.y(), area.bottom() - end.height() + 1)))
+        start = QRect(end.right() + 1, end.bottom() + 1 + self.SLIDE_IN_OFFSET, self.width_size, self.height_size)
         self.animation.setStartValue(start)
         self.animation.setEndValue(end)
         self.animation.start()
@@ -2062,13 +2110,20 @@ class MainAppWindow(ExplorerMixin, QMainWindow):
         in_popup = isinstance(source_widget, PopupWindow)
         if not in_popup and self._focus_existing_tab(path):
             return
-        widget = self._create_plugin_widget(path, "Popup" if in_popup else "Window", source_widget)
+        widget = self.create_plugin_widget(path, "Popup" if in_popup else "Window", source_widget)
         if widget is None:
             return
         if in_popup:
-            source_widget.show_plugin_widget(widget, meta.tab_title(path), meta)
+            source_widget.show_plugin_widget(widget, meta.tab_title(path), meta, path)
         else:
             self._add_plugin_tab(widget, path, meta)
+
+    def plugin_tab_widget(self, path: str) -> QWidget | None:
+        """PluginWidget des offenen Tabs zu path, sonst None."""
+        for i in range(self.tab_widget.count()):
+            if self.tab_widget.widget(i).property("plugin_path") == path:
+                return getattr(self.tab_widget.widget(i), "plugin_widget", None)
+        return None
 
     def _focus_existing_tab(self, path: str) -> bool:
         for i in range(self.tab_widget.count()):
@@ -2077,7 +2132,7 @@ class MainAppWindow(ExplorerMixin, QMainWindow):
                 return True
         return False
 
-    def _create_plugin_widget(self, path: str, mode: str, parent: QWidget | None) -> QWidget | None:
+    def create_plugin_widget(self, path: str, mode: str, parent: QWidget | None) -> QWidget | None:
         lower = path.lower()
         if lower.endswith(".html"):
             return HtmlPluginContainer(path)
@@ -2104,6 +2159,7 @@ class MainAppWindow(ExplorerMixin, QMainWindow):
     def _add_plugin_tab(self, widget: QWidget, path: str, meta: PluginMeta) -> None:
         container = QWidget()
         container.setProperty("plugin_path", path)
+        container.plugin_widget = widget    # für push (plugin_tab_widget)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.addWidget(widget)
@@ -2142,6 +2198,14 @@ class TrayApp(QApplication):
         self.tray.activated.connect(self.on_tray_activated)
         self.tray.setVisible(True)
         self.aboutToQuit.connect(self.teardown)
+        if callable(install_push_handler):
+            install_push_handler(self.handle_push)
+        self.plugin_tools = None
+        if PluginToolServer is not None:
+            self.plugin_tools = PluginToolServer(os.path.abspath(SCRIPT_FOLDER), load_plugin_module,
+                                                 self.open_plugin_widgets, self.open_tool_widget,
+                                                 self.show_tool_widget, self)
+            self.plugin_tools.start()
 
     def on_tray_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.Context:
@@ -2153,16 +2217,167 @@ class TrayApp(QApplication):
             window.activateWindow()
             window.raise_()
 
+    def handle_push(self, plugin: str, data) -> None:
+        """services.push(plugin, data): Plugin öffnen und data an PluginWidget.on_push geben.
+
+        Ist das Plugin im sichtbaren Hauptfenster schon als Tab offen, kommt es dort nach
+        vorne (keine zweite Instanz); sonst öffnet sich das Popup am Tray-Icon damit.
+        """
+        path = os.path.abspath(plugin if os.path.isabs(plugin) else os.path.join(SCRIPT_FOLDER, plugin))
+        if not (is_inside_script_folder(path) and os.path.isfile(path)):
+            log.warning("push: Plugin nicht gefunden: %s", plugin)
+            return
+        window = self.main_window
+        widget = window.plugin_tab_widget(path) if window.isVisible() and not window.isMinimized() else None
+        if widget is not None:
+            window.load_plugin_from_path(path, source_widget=window)   # Tab nach vorne
+            window.raise_()
+            window.activateWindow()
+        else:
+            widget = self.popup.open_plugin(path, window.create_plugin_widget)
+            if widget is None:
+                return
+            self.popup.show_popup(anchor=self._tray_anchor())
+        handler = getattr(widget, "on_push", None)
+        if callable(handler):
+            # noinspection PyBroadException
+            try:
+                handler(data)
+            except Exception:  # pylint: disable=broad-exception-caught
+                # Bewusst breit: Plugin-Code kann jeden Fehler werfen.
+                log.exception("on_push in %s fehlgeschlagen", path)
+        elif data is not None:
+            log.info("push: %s hat kein on_push(data) - Daten verworfen", os.path.basename(path))
+
+    def open_plugin_widgets(self, path: str) -> list[QWidget]:
+        """Offene PluginWidgets eines Plugins: auf dem Board des Assistenten, Tab im
+        Hauptfenster und/oder Seite im Popup."""
+        path = os.path.abspath(path)
+        widgets = [board.board_plugin(path) for board in self._assistant_widgets()
+                   if board.board_plugin(path) is not None]
+        return widgets + self._tab_and_popup_widgets(path)
+
+    def _tab_and_popup_widgets(self, path: str) -> list[QWidget]:
+        widgets = []
+        tab = self.main_window.plugin_tab_widget(path)
+        if tab is not None:
+            widgets.append(tab)
+        page = self.popup.pages.currentWidget()
+        if page is not self.popup.explorer_root and page.property("plugin_path") == path:
+            widgets.append(page.plugin_widget)
+        return widgets
+
+    def _assistant_widgets(self) -> list[QWidget]:
+        """Offene 3D-Assistenten, die Plugins auf ihrem Board zeigen können (show_on_board)."""
+        name = getattr(_services, "ASSISTANT_PLUGIN", "")
+        if not name:
+            return []
+        path = os.path.abspath(os.path.join(SCRIPT_FOLDER, name))
+        return [w for w in self._tab_and_popup_widgets(path) if callable(getattr(w, "show_on_board", None))]
+
+    def _visible_board(self) -> QWidget | None:
+        """Assistent, dessen Board gerade zu sehen ist - dort erscheinen bediente Plugins.
+        Steht Miku im schmalen Popup (kein Board), schaltet es auf "⇔ Breit": Dann bekommt
+        sie ein Board (der Viewer wechselt bei breitem Fenster das Layout)."""
+        assistants = self._assistant_widgets()
+        board = next((w for w in assistants if w.board_available()), None)
+        popup = self.popup
+        page = popup.pages.currentWidget()
+        assistant = getattr(page, "plugin_widget", None)
+        log.info("Board: %d Assistent(en) offen, Board sichtbar: %s | Popup sichtbar=%s, Assistent im Popup=%s, "
+                 "Breit=%s", len(assistants), board is not None, popup.isVisible(), assistant in assistants,
+                 popup.plugin_size_active)
+        if board is not None:
+            return board
+        if assistant in assistants and popup.isVisible() and popup.plugin_size:
+            if not popup.plugin_size_active:
+                log.info("Board: Popup auf breit schalten")
+                popup.toggle_plugin_size()
+            return assistant                    # Plugin erscheint, sobald das Board da ist
+        return None
+
+    def _put_on_board(self, board: QWidget, path: str) -> QWidget | None:
+        """Neues Plugin-Widget auf dem Board des Assistenten (Window-Modus, volle Oberfläche)."""
+        widget = self.main_window.create_plugin_widget(path, "Window", board)
+        if widget is None:
+            return None
+        return board.show_on_board(path, widget, PluginMeta.from_file(path).tab_title(path))
+
+    def open_tool_widget(self, path: str, board: bool = True) -> QWidget:
+        """Fenster für ein Werkzeug mit "window": True (plugin_tools.py): ein offenes nehmen,
+        sonst aufs Board des Assistenten legen (wenn zu sehen) oder als Tab im Hauptfenster
+        öffnen - das Popup bleibt dem frei, was gerade darin läuft."""
+        path = os.path.abspath(path)
+        widgets = self.open_plugin_widgets(path)
+        if widgets:
+            log.info("Werkzeug-Fenster %s: schon offen, nehme %s", os.path.basename(path), type(widgets[0]).__name__)
+            return widgets[0]
+        assistant = self._visible_board() if board else None
+        if assistant is not None:
+            widget = self._put_on_board(assistant, path)
+            if widget is not None:
+                return widget
+        window = self.main_window
+        window.load_plugin_from_path(path, source_widget=window)
+        widget = window.plugin_tab_widget(path)
+        if widget is None:
+            raise RuntimeError(f"{os.path.basename(path)} ließ sich nicht als Fenster öffnen")
+        if window.isMinimized() or not window.isVisible():
+            window.showNormal()
+        window.raise_()
+        window.activateWindow()
+        return widget
+
+    def show_tool_widget(self, path: str, force: bool = True, allow_new: bool = True,
+                         board: bool = True) -> None:
+        """Nach einem Werkzeug-Aufruf (plugin_tools.py) das Plugin zeigen, damit man sieht,
+        was der Assistent tut: auf dem Board des Assistenten, wenn es zu sehen ist.
+        force ("show": True): sonst als Tab im Hauptfenster (vorhandenen nach vorne holen).
+        allow_new=False (Werkzeuge mit "window"): keine zweite Instanz neben einer offenen."""
+        path = os.path.abspath(path)
+        assistant = self._visible_board() if board else None
+        if assistant is not None:
+            if assistant.board_plugin(path) is not None:
+                assistant.show_on_board(path, None, PluginMeta.from_file(path).tab_title(path))
+                return
+            if allow_new or not self._tab_and_popup_widgets(path):
+                if self._put_on_board(assistant, path) is not None:
+                    return
+        log.info("Zeigen %s: nicht aufs Board (Assistent=%s, schon als Tab/Popup offen=%s) -> %s",
+                 os.path.basename(path), assistant is not None, bool(self._tab_and_popup_widgets(path)),
+                 "Tab" if force else "nichts")
+        if not force:
+            return
+        window = self.main_window
+        window.load_plugin_from_path(path, source_widget=window)
+        if window.isMinimized() or not window.isVisible():
+            window.showNormal()
+        window.raise_()
+        window.activateWindow()
+
+    def _tray_anchor(self) -> QPoint:
+        """Punkt, an dem das Popup bei push erscheint: am Tray-Icon, sonst unten rechts."""
+        icon = self.tray.geometry()
+        if icon.isValid() and not icon.isEmpty():
+            return icon.center()
+        return QGuiApplication.primaryScreen().availableGeometry().bottomRight()
+
     def teardown(self) -> None:
         """Web-Views vor dem Beenden freigeben (vermeidet WebEngine-Warnungen)."""
         self.tray.hide()
+        if self.plugin_tools is not None:
+            self.plugin_tools.stop()
         for window in (self.popup, self.main_window):
             stop_web_views(window)
             window.toolbar.deleteLater()
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    # Konsole + logs/toolbar.log (je Start neu) - z. B. für "Plugin erscheint nicht auf dem Board"
+    os.makedirs("logs", exist_ok=True)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+                        handlers=[logging.StreamHandler(),
+                                  logging.FileHandler(os.path.join("logs", "toolbar.log"), "w", encoding="utf-8")])
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     if sys.platform == "win32":  # eigenes Taskleisten-Icon statt python.exe

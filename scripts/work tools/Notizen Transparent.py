@@ -3,6 +3,7 @@
 # eigener Name/Icon. Erscheint nur im Hauptfenster (nicht im Popup).
 # =============================================================================
 NAME = "Notizen (Demo)"
+DESCRIPTION = "Demo: halbtransparenter Notizen-Knopf mit eigenen Parametern."
 ICON = "📝"
 BUTTON_HEIGHT = 48
 OPACITY = 0.75

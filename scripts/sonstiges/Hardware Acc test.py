@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Hardware Acc Test"
+DESCRIPTION = "Testseite: prüft, ob die Webansichten Hardwarebeschleunigung (GPU/WebGL) nutzen."
 ICON = "🖥️"
 # ----------------------------------------
 

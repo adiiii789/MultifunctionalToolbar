@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Zombie Game"
+DESCRIPTION = "Zombie-Shooter mit Angriffswellen, Shop, mehreren Karten und Bossgegner."
 ICON = "🧟"
 # ----------------------------------------
 

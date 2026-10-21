@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "TexPage"
+DESCRIPTION = "Öffnet den Online-LaTeX-Editor TexPage im Hauptfenster."
 ICON = "📄"
 # ----------------------------------------
 

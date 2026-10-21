@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Noten"
+DESCRIPTION = "Notenverwaltung: Fächer und Noten erfassen, Durchschnitte berechnen."
 ICON = "🎓"
 # ----------------------------------------
 

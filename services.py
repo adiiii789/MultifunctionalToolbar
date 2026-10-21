@@ -13,12 +13,15 @@
 #                           (Windows 10/11, optional "pip install winsdk")
 #   - apply_native_titlebar: Färbt die NATIVE Windows-Titelleiste (DWM),
 #                           ohne sie zu ersetzen — Snap/Andocken bleiben.
+#   - push:                 Eine Komponente öffnet das Popup mit ihrem Plugin
+#                           von sich aus und übergibt ihm Daten.
+#   - say:                  Der Assistent (ASSISTANT_PLUGIN) sagt einen Text.
 #   - create_services:      Registry aller Dienste für den WebChannel.
 # =============================================================================
 
 import traceback
 
-from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QEvent
+from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QEvent, Qt
 from PyQt5.QtWidgets import QApplication
 
 
@@ -252,6 +255,54 @@ def apply_native_titlebar(widget, dark, caption_color, text_color):
         dwm.DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, ctypes.byref(t), ctypes.sizeof(t))
     except Exception:
         pass  # z. B. dwmapi nicht verfügbar → native Standard-Leiste bleibt
+
+
+# =============================================================================
+# Push: eine Komponente öffnet das Popup von sich aus
+# -----------------------------------------------------------------------------
+#   import services
+#   services.push("3D Assistent.py", "Dein Termin beginnt in 10 Minuten.")
+#
+# Öffnet das Popup am Tray-Icon, lädt das Plugin (oder nimmt das schon offene)
+# und übergibt die Daten an PluginWidget.on_push(data). Aus jedem Thread
+# aufrufbar (z. B. einem Timer oder HTTP-Server im Plugin) — der Launcher führt
+# es im Qt-Hauptthread aus. Gegenstück zu presenter.push im PDA.
+# =============================================================================
+class _PushHub(QObject):
+    requested = pyqtSignal(str, object)   # Plugin-Pfad, Daten
+
+
+_push_hub = None
+
+
+def install_push_handler(handler):
+    """Vom Launcher beim Start im Hauptthread aufgerufen: handler(plugin, data)."""
+    global _push_hub
+    _push_hub = _PushHub()
+    _push_hub.requested.connect(handler, Qt.QueuedConnection)
+
+
+def push(plugin, data=None):
+    """Popup mit dem Plugin öffnen und ihm data übergeben (siehe oben).
+
+    plugin: Pfad zur Plugin-Datei — absolut oder relativ zum Ordner scripts/.
+    data:   beliebiges Python-Objekt, kommt unverändert bei on_push(data) an.
+    Gibt False zurück, wenn kein Launcher läuft (Plugin allein gestartet)."""
+    if _push_hub is None:
+        print("[services] push ohne laufenden Launcher ignoriert:", plugin)
+        return False
+    _push_hub.requested.emit(str(plugin), data)
+    return True
+
+
+# Plugin, das für die Toolbar spricht (relativ zu scripts/) - Ziel von say()
+ASSISTANT_PLUGIN = "3D Assistent.py"
+
+
+def say(text):
+    """Der Assistent sagt text (sein Popup öffnet sich), z. B. wenn ein Timer abläuft.
+    So muss ein Plugin den Assistenten nicht kennen. Darf [aktionen] enthalten."""
+    return push(ASSISTANT_PLUGIN, text)
 
 
 # =============================================================================

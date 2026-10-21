@@ -1,13 +1,54 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Timer"
+DESCRIPTION = "Stoppuhr und Countdown-Timer."
 ICON = "⏱️"
 # ----------------------------------------
 
+# Werkzeuge für den KI-Assistenten (siehe plugin_tools.py im Toolbar-Ordner). "window": der
+# Countdown lebt im JavaScript des Fensters - der Launcher öffnet den Timer dafür bei Bedarf.
+ASSISTANT_TOOLS = {
+    "timer_start": {
+        "description": "Starts a countdown timer. When it ends, the assistant says done_message out loud.",
+        "parameters": {
+            "minutes": {"type": "number", "description": "Duration in minutes (may be fractional, e.g. 0.5)"},
+            "seconds": {"type": "integer", "description": "Additional seconds (optional)"},
+            "done_message": {"type": "string",
+                             "description": "Short sentence to say when the time is up, in the user's language"},
+        },
+        "required": ["done_message"],
+        "window": True,
+    },
+    "timer_status": {
+        "description": "Tells whether the countdown timer is running and how many seconds are left.",
+        "parameters": {},
+        "window": True,
+    },
+    "timer_cancel": {
+        "description": "Stops and resets the countdown timer.",
+        "parameters": {},
+        "window": True,
+    },
+}
+
 # scripts/pro_timer_html.py
+import json
+from concurrent.futures import Future
+
 from PyQt5.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QApplication
 from PyQt5.QtWebEngineWidgets import QWebEngineView
-from PyQt5.QtCore import QObject, pyqtSignal, QEvent
+from PyQt5.QtCore import QObject, pyqtSignal, QEvent, QTimer
 from PyQt5.QtGui import QPalette
+
+# Countdown aus Python setzen und starten (die Variablen stammen aus dem Skript im HTML)
+_START_COUNTDOWN_JS = """
+(function (h, m, s) {
+  tabCountdown.click();
+  cdReset.click();
+  inputH.value = h; inputM.value = m; inputS.value = s;
+  cdStartStop.click();
+  return cdRemaining;
+})(%d, %d, %d)"""
+_COUNTDOWN_STATE_JS = "JSON.stringify({running: cdRunning, remaining_seconds: Math.ceil(cdRemaining / 1000)})"
 
 def _detect_host_theme(default="dark"):
     """Ermittelt das aktuelle Theme der Hauptanwendung."""
@@ -61,6 +102,12 @@ class PluginWidget(QMainWindow):
         self._current_theme = _detect_host_theme(default=theme if theme in ("light", "dark") else "dark")
         self._theme_watcher = None
         self._view_ready = False
+        # Assistent: JavaScript, das vor dem Laden der Seite kommt, und die Ansage am Ende
+        self._pending_js = []
+        self._done_message = ""
+        self._done_timer = QTimer(self)
+        self._done_timer.setSingleShot(True)
+        self._done_timer.timeout.connect(self._check_countdown_done)
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -511,6 +558,59 @@ class PluginWidget(QMainWindow):
 
     def _on_view_ready(self, ok: bool):
         self._view_ready = bool(ok)
+        if self._view_ready:
+            pending, self._pending_js = self._pending_js, []
+            for code, callback in pending:
+                self._run_js(code, callback)
+
+    # --- KI-Assistent (ASSISTANT_TOOLS oben) ------------------------------------
+    def assistant_call(self, tool, args):
+        if tool == "timer_start":
+            total = round(float(args.get("minutes") or 0) * 60 + float(args.get("seconds") or 0))
+            if total <= 0:
+                raise ValueError("The duration must be greater than 0.")
+            hours, rest = divmod(total, 3600)
+            minutes, seconds = divmod(rest, 60)
+            self._run_js(_START_COUNTDOWN_JS % (hours, minutes, seconds))
+            self._done_message = str(args.get("done_message") or "").strip()
+            self._done_timer.start(total * 1000 + 300)
+            return f"Countdown started: {hours:02d}:{minutes:02d}:{seconds:02d}"
+        if tool == "timer_cancel":
+            self._done_timer.stop()
+            self._done_message = ""
+            self._run_js("cdReset.click();")
+            return "Countdown stopped and reset."
+        if tool == "timer_status":
+            result = Future()                    # Antwort kommt asynchron aus dem JavaScript
+            self._run_js(_COUNTDOWN_STATE_JS,
+                         lambda raw: result.set_result(json.loads(raw) if raw else {"running": False}))
+            return result
+        raise ValueError(f"Unknown tool: {tool}")
+
+    def _run_js(self, code, callback=None):
+        if not self._view_ready:
+            self._pending_js.append((code, callback))
+        elif callback is None:
+            self.browser.page().runJavaScript(code)
+        else:
+            self.browser.page().runJavaScript(code, callback)
+
+    def _check_countdown_done(self):
+        """Zur erwarteten Endzeit nachsehen: abgelaufen -> ansagen; pausiert/verlängert -> später erneut."""
+        def checked(raw):
+            state = json.loads(raw) if raw else {}
+            remaining = int(state.get("remaining_seconds") or 0)
+            if state.get("running") or remaining > 0:
+                self._done_timer.start(max(remaining, 5) * 1000 + 300)
+                return
+            if self._done_message:
+                try:
+                    import services              # liegt neben tray_launcher.py
+                    services.say(self._done_message)
+                except Exception as exc:  # noqa: BLE001  # ohne Toolbar/Assistent: nur protokollieren
+                    print(f"[Timer] Ansage nicht möglich: {exc}")
+            self._done_message = ""
+        self._run_js(_COUNTDOWN_STATE_JS, checked)
 
     def _on_host_theme_changed(self, theme: str):
         """Wird aufgerufen, wenn sich das Theme im Launcher ändert."""

@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Milestone Master Ultra"
+DESCRIPTION = "Erweiterte Projektplanung mit Meilensteinen (Milestone Master Ultra)."
 ICON = "🏁"
 # ----------------------------------------
 

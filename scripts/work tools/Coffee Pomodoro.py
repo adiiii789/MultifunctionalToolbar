@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Coffee Pomodoro"
+DESCRIPTION = "Pomodoro-Timer: wechselt zwischen Arbeitsphasen und Pausen."
 ICON = "☕"
 # ----------------------------------------
 

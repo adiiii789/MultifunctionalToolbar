@@ -1,0 +1,21 @@
+/* Layout der Board-Ansichten (wird in die Templates eingebettet). Schrift nach der Breite (vw),
+   damit sie auf dem ganzen Board wie im schmalen Streifen unter einem Plugin gleich groß ist.
+   Der Viewer läuft in QtWebEngine 5.15 (Chromium 83): kein "gap" bei Flexbox. */
+body {
+  padding: 1.2em 2em;
+  box-sizing: border-box;
+  font-size: clamp(12px, 1.9vw, 22px);
+}
+
+h2 { margin: 0 0 0.6em; font-size: 1.35em; color: var(--accent); }
+p  { margin: 0; color: var(--text-muted); }
+
+p + table { margin-top: 0.8em; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+th, td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.3em 0.5em;
+  border-bottom: 1px solid var(--border);
+}
+th { background: var(--surface); color: var(--text-muted); font-weight: 600; }

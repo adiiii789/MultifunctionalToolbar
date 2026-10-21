@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 # --- Plugin-Parameter (neues System) ---
 NAME = "Snake"
+DESCRIPTION = "Das Spiel Snake."
 ICON = "🐍"
 # ----------------------------------------
 

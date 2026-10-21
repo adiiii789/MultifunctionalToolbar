@@ -1,5 +1,6 @@
 # --- Plugin-Parameter (neues System) ---
 NAME = "Minesweeper"
+DESCRIPTION = "Das Spiel Minesweeper im Windows-95-Stil."
 ICON = "💣"
 # ----------------------------------------
 

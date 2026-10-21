@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<!-- Ein Plugin der Toolbar auf dem Board (stage.js: showPluginOnBoard).
+     Das echte Plugin-Fenster liegt verdeckt unter der 3D-Ansicht (3D Assistent.py, _BoardHost);
+     diese Seite zeigt laufend Bilder davon (GET /board/frame) und schickt Maus-Eingaben zurück
+     (POST /board/input). So liegt das Plugin wirklich im Board - Menü und Figur bleiben darüber.
+     Tastatur: Ein Klick gibt dem Plugin den Fokus, danach tippt man direkt hinein.
+     Läuft in QtWebEngine 5.15 (Chromium 83). -->
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Plugin</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #111318;
+                 font-family: "Segoe UI", system-ui, sans-serif; }
+    #bar { height: 28px; display: flex; align-items: center; justify-content: space-between;
+           background: #1d2128; color: #e6e6e6; font-size: 13px; font-weight: 600;
+           padding: 0 2px 0 10px; user-select: none; }
+    #close { background: none; border: none; color: #e6e6e6; font-size: 14px; cursor: pointer;
+             padding: 3px 9px; }
+    #close:hover { background: #37474f; }
+    #view { position: absolute; top: 28px; left: 0; right: 0; bottom: 0; outline: none; }
+    #img { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-drag: none; }
+    #wait { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center;
+            color: #8a96a3; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div id="bar"><span id="title"></span><button id="close" title="Plugin vom Board nehmen (läuft im Hintergrund weiter)">✕</button></div>
+  <div id="view"><div id="wait">lädt …</div><img id="img" alt=""></div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const sid = encodeURIComponent(params.get("s") || "");
+    const auth = { "X-A3D-Token": params.get("k") || "" };   // Zugang zum Asset-Server (js/token.js)
+    const img = document.getElementById("img"), view = document.getElementById("view");
+    document.getElementById("title").textContent = params.get("t") || "Plugin";
+
+    // --- Eingaben: der Reihe nach (sonst kann "loslassen" vor "drücken" ankommen) ---
+    let sending = Promise.resolve();
+    function post(ev) {
+      sending = sending.then(() => fetch("/board/input?s=" + sid, {
+        method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, auth), body: JSON.stringify(ev)
+      })).catch(() => {});
+    }
+    function at(e) {                       // Position als Anteil des Bildes (0..1)
+      const r = img.getBoundingClientRect();
+      return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height,
+               button: e.button, buttons: e.buttons, shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey };
+    }
+    view.addEventListener("mousedown", e => { e.preventDefault(); post(Object.assign({ type: "down" }, at(e))); });
+    window.addEventListener("mouseup", e => post(Object.assign({ type: "up" }, at(e))));
+    view.addEventListener("dblclick", e => post(Object.assign({ type: "dbl" }, at(e))));
+    view.addEventListener("contextmenu", e => e.preventDefault());
+    view.addEventListener("wheel", e => {
+      e.preventDefault();
+      const px = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1;   // Zeilen/Seiten -> Pixel
+      post(Object.assign({ type: "wheel", dx: e.deltaX * px, dy: e.deltaY * px }, at(e)));
+    }, { passive: false });
+    let lastMove = null;                   // Bewegung höchstens einmal pro Bild
+    view.addEventListener("mousemove", e => {
+      if (!lastMove) requestAnimationFrame(() => { post(lastMove); lastMove = null; });
+      lastMove = Object.assign({ type: "move" }, at(e));
+    });
+    document.getElementById("close").addEventListener("click", () => post({ type: "close" }));
+
+    // Größe der Bildfläche: das Plugin bekommt genau diese Größe (Bild 1:1, keine Verzerrung)
+    function sendSize() { post({ type: "size", w: view.clientWidth, h: view.clientHeight }); }
+    new ResizeObserver(sendSize).observe(view);
+
+    // --- Bilder: warten, bis ein neues da ist (der Server hält die Anfrage bis ~1 s) ---
+    let seq = -1, shownUrl = null;
+    img.addEventListener("load", () => {
+      document.getElementById("wait").style.display = "none";
+      if (shownUrl && shownUrl !== img.src) URL.revokeObjectURL(shownUrl);
+      shownUrl = img.src;
+    });
+    (async function frames() {
+      for (;;) {
+        try {
+          const r = await fetch("/board/frame?s=" + sid + "&after=" + seq, { cache: "no-store", headers: auth });
+          if (r.status === 404) return;          // Plugin weg (Fenster zu) - Seite bleibt stehen
+          if (r.status === 200) {
+            seq = Number(r.headers.get("X-Seq"));
+            img.src = URL.createObjectURL(await r.blob());
+          }
+        } catch (e) {
+          await new Promise(done => setTimeout(done, 500));
+        }
+      }
+    })();
+  </script>
+</body>
+</html>
