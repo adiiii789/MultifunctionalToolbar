@@ -1,14 +1,16 @@
 # Multifunctional Toolbar v2 (Traylauncher)
 
-Sauberer Nachbau des Tray-Launchers. `Traylauncher.py` liegt im Root und ist die Mainklasse. Optik, Größen und Verhalten des Originals sind vollständig erhalten (Popup 15 % × 50 % des Bildschirms, Hauptfenster 40 % × 40 %, Theme-Toggle mit Sonne/Mond-Switch, Tabs, Suche, identische Farben und Stylesheets).
+Sauberer Nachbau des Tray-Launchers. `tray_launcher.py` liegt im Root und ist die Mainklasse. Optik, Größen und Verhalten des Originals sind vollständig erhalten (Popup 15 % × 50 % des Bildschirms, Hauptfenster 40 % × 40 %, Theme-Toggle mit Sonne/Mond-Switch, Tabs, Suche, identische Farben und Stylesheets).
 
 ## Start
 
 ```bash
-pip install PyQt5 PyQtWebEngine
-pip install winsdk   # optional: Album-Cover der laufenden Medien (Win 10/11)
-python Traylauncher.py
+pip install -r requirements.txt   # PyQt5/QtWebEngine, Kalender, Bildersuche, optional winsdk
+python tray_launcher.py
 ```
+
+Der 3D-Assistent bringt zwei Hilfsdienste mit eigener venv mit: `scripts/_a3d/ai/setup_ai.bat`
+(KI-Dienst) und `scripts/_a3d/tts/setup_tts.bat` (Miku-Stimme).
 
 Inline-HTML-Cards können über die Media-Bridge zusätzlich `media.requestMediaInfo()` aufrufen und erhalten über das Signal `media.mediaInfoChanged` ein JSON mit Titel, Interpret, Wiedergabestatus und Album-Cover (Base64) der gerade laufenden Medien — genutzt z. B. von `Dual UI.py`, das das Cover rechts im Button anzeigt. Ohne `winsdk` oder ohne laufende Medien bleibt das Cover einfach ausgeblendet.
 

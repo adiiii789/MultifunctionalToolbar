@@ -1,0 +1,21 @@
+# Multifunctional Toolbar - Abhängigkeiten der Toolbar und ihrer Plugins (Python 3.10-3.12, Windows)
+#   pip install -r requirements.txt
+#
+# Der 3D-Assistent hat zwei Hilfsdienste mit eigener venv und eigener Liste (nicht hier):
+#   scripts/_a3d/ai/requirements-ai.txt    KI-Dienst (Ollama/MCP, Whisper, Piper) - setup_ai.bat
+#   scripts/_a3d/tts/requirements-tts.txt  Miku-Stimme (Edge-TTS + RVC)          - setup_tts.bat
+
+# Oberfläche (Qt 5.15 mit QtWebEngine; die Viewer/Plugins nutzen Chromium 83 daraus)
+PyQt5>=5.15.11,<5.16
+PyQtWebEngine>=5.15.7,<5.16
+
+# Kalender (.ics-Dateien und Abos, Serientermine)
+icalendar>=6.3,<7
+python-dateutil>=2.9,<3
+pytz>=2025.2
+
+# Bildersuche (Bilder aus dem Internet über DuckDuckGo)
+ddgs>=9.16,<10
+
+# Optional: Album-Cover/Titel der laufenden Medien (services.py, Dual UI) - nur Windows 10/11
+winsdk==1.0.0b10; sys_platform == "win32" and python_version < "3.13"

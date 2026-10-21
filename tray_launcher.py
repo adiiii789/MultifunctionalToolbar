@@ -44,6 +44,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import ctypes
+import faulthandler
 import html
 import importlib.util
 import json
@@ -58,6 +59,15 @@ from string import Template
 from types import ModuleType
 from collections.abc import Callable
 from typing import NamedTuple
+
+if __name__ == "__main__":
+    # Vor den Qt-Importen: Gestartet über Verknüpfung/Autostart ist das Arbeitsverzeichnis nicht
+    # garantiert - scripts/, logs/ usw. sind relativ, also in den Ordner dieser Datei wechseln.
+    # Harte Abstürze (auch schon beim Laden) landen mit Python-Stack in logs/crash.log.
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    os.makedirs("logs", exist_ok=True)
+    _CRASH_LOG = open(os.path.join("logs", "crash.log"), "a", encoding="utf-8")  # pylint: disable=consider-using-with
+    faulthandler.enable(_CRASH_LOG)
 
 from PyQt5.QtCore import (
     QEasingCurve, QEvent, QFileSystemWatcher, QObject, QPoint, QPropertyAnimation,
@@ -2372,12 +2382,25 @@ class TrayApp(QApplication):
             window.toolbar.deleteLater()
 
 
+def _log_uncaught(exc_type, exc, tb) -> None:
+    """Unbehandelter Fehler (z. B. in einem Qt-Slot): ins Protokoll statt Absturz. Ohne eigenen
+    sys.excepthook beendet PyQt5 den Prozess hart (qFatal, Windows-Fehler 0xc0000409)."""
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc, tb)
+        return
+    log.critical("Unbehandelter Fehler", exc_info=(exc_type, exc, tb))
+
+
 def main() -> int:
-    # Konsole + logs/toolbar.log (je Start neu) - z. B. für "Plugin erscheint nicht auf dem Board"
+    # logs/toolbar.log (je Start neu) - z. B. für "Plugin erscheint nicht auf dem Board"; Konsole nur,
+    # wenn es eine gibt (pythonw.exe/Autostart: sys.stderr ist None)
     os.makedirs("logs", exist_ok=True)
+    handlers = [logging.FileHandler(os.path.join("logs", "toolbar.log"), "w", encoding="utf-8")]
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler())
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-                        handlers=[logging.StreamHandler(),
-                                  logging.FileHandler(os.path.join("logs", "toolbar.log"), "w", encoding="utf-8")])
+                        handlers=handlers)
+    sys.excepthook = _log_uncaught
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     if sys.platform == "win32":  # eigenes Taskleisten-Icon statt python.exe
