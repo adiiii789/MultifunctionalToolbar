@@ -96,6 +96,8 @@ WRITABLE_JSON = {"/look_calibration_popup.json", "/look_calibration_window.json"
                  "/assistant_settings.json"}
 MAX_POST_BYTES = 8192
 MAX_AI_POST_BYTES = 64 * 1024
+CHAT_LOG_MAX = 200     # Chatzeilen, die ein neu geöffneter Viewer (Fenster/Popup) nachgereicht bekommt
+MAX_CHAT_TEXT = 8000   # Zeichen je geteilter Chatzeile
 
 # Die Toolbar lädt dieses Modul bei jedem Öffnen des Fensters frisch. Asset-Server
 # und TTS-Dienst sollen aber nur EINMAL pro Toolbar-Prozess laufen -> gemeinsamer
@@ -108,6 +110,9 @@ if not hasattr(_SHARED, "lock"):
     _SHARED.tts = None
 if not hasattr(_SHARED, "board_streams"):
     _SHARED.board_streams = {}   # id -> _BoardStream (Plugin auf dem Board, siehe unten)
+if not hasattr(_SHARED, "viewer_links"):
+    _SHARED.viewer_links = {}    # id -> _ViewerLink (Fenster und Popup synchron, siehe unten)
+    _SHARED.chat_log = []        # geteilte Chatzeilen {"sender", "text"} für neu geöffnete Viewer
 if not hasattr(_SHARED, "token"):
     # Zugang zum Asset-Server (Viewer: viewer.html?k=..., js/token.js) und zum KI-Dienst. Ohne
     # könnte jedes Programm auf dem PC - oder eine Webseite, die den Port errät - Miku Aufträge
@@ -661,6 +666,35 @@ class _QuietHandler(SimpleHTTPRequestHandler):
             return
         self._send_json(200, {"ok": push_to_toolbar(data)})
 
+    def _do_chat_sync(self):
+        """POST /chat/sync?v=<viewer> {"sender", "text", "reveal"}: Chatzeile eines Viewers an alle
+        offenen Viewer (Fenster und Popup zeigen denselben Chat, PluginWidget._on_chat_sync).
+        reveal: Antwort auf eine Frage - der fragende Viewer kommt nach vorne."""
+        viewer = parse_qs(urlparse(self.path).query).get("v", [""])[0]
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            if not 0 < length <= MAX_AI_POST_BYTES:
+                raise ValueError("Größe")
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("kein Objekt")
+        except Exception as e:
+            self._send_json(400, {"error": str(e)})
+            return
+        entry = {"sender": str(data.get("sender", ""))[:100], "text": str(data.get("text", ""))[:MAX_CHAT_TEXT]}
+        with _lock:
+            if entry["text"]:
+                _SHARED.chat_log.append(entry)
+                del _SHARED.chat_log[:-CHAT_LOG_MAX]
+            links = list(_SHARED.viewer_links.items())
+        for link_id, link in links:
+            try:
+                link.chat.emit(dict(entry, own=link_id == viewer, reveal=bool(data.get("reveal"))))
+            except RuntimeError:            # Fenster inzwischen zu
+                pass
+        self.send_response(204)
+        self.end_headers()
+
     def do_POST(self):
         """Speichert Einstellungen des Viewers (z. B. Blick-Kalibrierung) als
         JSON-Datei in _a3d/viewer/. Nur die Pfade aus WRITABLE_JSON sind erlaubt.
@@ -676,6 +710,9 @@ class _QuietHandler(SimpleHTTPRequestHandler):
             return
         if path == "/push":
             self._do_push()
+            return
+        if path == "/chat/sync":
+            self._do_chat_sync()
             return
         if path == "/board/input":
             self._board_input()
@@ -732,6 +769,24 @@ def push_to_toolbar(data):
     return services.push(os.path.abspath(__file__), data)
 
 
+def reveal_in_toolbar(widget):
+    """Popup bzw. Hauptfenster mit diesem PluginWidget zeigen und nach vorne holen (services.reveal).
+    False, wenn die Toolbar nicht läuft - dann das Fenster selbst nach vorne holen."""
+    try:
+        import services
+    except ImportError:
+        services = None
+    reveal = getattr(services, "reveal", None)
+    if callable(reveal) and reveal(widget):
+        return True
+    window = widget.window()
+    if window.isMinimized() or not window.isVisible():
+        window.showNormal()
+    window.raise_()
+    window.activateWindow()
+    return False
+
+
 class _LoggingPage(QWebEnginePage):
     def javaScriptConsoleMessage(self, level, message, line, source):
         print(f"[3D Assistent JS] {message} (Zeile {line})")
@@ -770,6 +825,17 @@ class _BoardStream(QObject):
         with self.cond:
             self.cond.wait_for(lambda: self.seq != after, timeout)
             return self.seq, self.frame
+
+
+class _ViewerLink(QObject):
+    """Fenster und Popup synchron: Chatzeilen eines Viewers (POST /chat/sync) kommen hierüber in
+    den Qt-Hauptthread zu jedem offenen PluginWidget. Liegt in _SHARED.viewer_links, weil der
+    HTTP-Server das Neuladen des Moduls überlebt."""
+    chat = pyqtSignal(dict)
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.id = secrets.token_urlsafe(12)
 
 
 class _BoardHost(QWidget):
@@ -888,8 +954,14 @@ class PluginWidget(QMainWindow):
             threading.Thread(target=tts_service().ensure_started, daemon=True).start()
         if AI_AUTOSTART:
             threading.Thread(target=ai_service().ensure_started, daemon=True).start()
-        self.browser.setUrl(QUrl(
-            "http://127.0.0.1:%d/viewer.html?mode=%s&k=%s" % (port, str(mode).lower(), _SHARED.token)))
+        # Fenster und Popup synchron (siehe _ViewerLink): Der Viewer meldet sich mit ?v=<id>
+        self._viewer_link = _ViewerLink(self)
+        self._viewer_link.chat.connect(self._on_chat_sync)
+        link_id = self._viewer_link.id
+        _SHARED.viewer_links[link_id] = self._viewer_link
+        self.destroyed.connect(lambda *_: _SHARED.viewer_links.pop(link_id, None))
+        self.browser.setUrl(QUrl("http://127.0.0.1:%d/viewer.html?mode=%s&k=%s&v=%s"
+                                 % (port, str(mode).lower(), _SHARED.token, link_id)))
         lay.addWidget(self.browser)
         self.setCentralWidget(central)
         # push-Nachrichten, die vor dem Laden der Seite kommen, warten hier
@@ -1118,9 +1190,23 @@ class PluginWidget(QMainWindow):
         else:
             self._pending_pushes.append(payload)
 
+    def _on_chat_sync(self, entry):
+        """Chatzeile aus einem Viewer (POST /chat/sync): Die anderen Viewer zeigen sie auch. Ist es
+        die Antwort auf eine Frage aus diesem Viewer, kommt er nach vorne (Popup/Fenster)."""
+        if entry.get("own"):
+            if entry.get("reveal"):
+                reveal_in_toolbar(self)
+        elif self._loaded and entry.get("text"):
+            self._page.runJavaScript("window.receiveChatSync && receiveChatSync(%s);"
+                                     % json.dumps({"sender": entry["sender"], "text": entry["text"]}))
+
     def _on_load_finished(self, ok):
         self._loaded = ok
         if ok:
+            with _lock:
+                log_entries = list(_SHARED.chat_log)
+            if log_entries:                 # bisheriger Chat aus dem anderen Viewer
+                self._page.runJavaScript("window.restoreChat && restoreChat(%s);" % json.dumps(log_entries))
             pending, self._pending_pushes = self._pending_pushes, []
             for payload in pending:
                 self.on_push(payload)

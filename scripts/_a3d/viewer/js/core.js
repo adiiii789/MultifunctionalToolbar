@@ -29,6 +29,7 @@ function sendChatMessage(message) {
   // [Aktionen] werden nicht angezeigt, sondern ausgeführt (actions.js)
   const shown = typeof stripActions === "function" ? stripActions(message) : message;
   if (shown) addMessage("Du", shown);
+  if (shown && typeof shareChat === "function") shareChat("Du", shown);   // Fenster und Popup synchron
   if (typeof askAssistant === "function" && askAssistant(message)) return;
   if (typeof runActions === "function") runActions(message);
   else speak(message);

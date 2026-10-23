@@ -16,7 +16,9 @@
    Ohne KI-Dienst (oder "KI antwortet: aus") spricht die Figur wie bisher den eingegebenen Text.
    Nachrichten ohne Nutzereingabe (Toolbar-push, z. B. Erinnerung): receivePush({text, view}) -
    das Plugin ruft es aus PluginWidget.on_push auf.
-   Von außen: askAssistant(text), resetAssistant(), getAssistantStatus()                  */
+   Fenster und Popup zeigen denselben Chat (shareChat, siehe "Fenster und Popup synchron").
+   Von außen: askAssistant(text), resetAssistant(), getAssistantStatus(),
+              receiveChatSync({sender, text}), restoreChat([...])                         */
 
 const ASSISTANT = {
   enabled: true,            // KI antwortet (Panel); aus = die Figur spricht, was man schreibt
@@ -121,7 +123,10 @@ function selectAssistantModel(name) {
 
 /** Neues Gespräch: die KI vergisst den bisherigen Verlauf. */
 function resetAssistant() {
-  return aiPost("reset").then(() => addMessage(ACTIONS.assistantName, "Neues Gespräch begonnen."))
+  return aiPost("reset").then(() => {
+    addMessage(ACTIONS.assistantName, "Neues Gespräch begonnen.");
+    shareChat(ACTIONS.assistantName, "Neues Gespräch begonnen.");
+  })
     .catch(e => addMessage("⚠", "Zurücksetzen fehlgeschlagen: " + e.message));
 }
 
@@ -183,7 +188,28 @@ async function requestAssistantReply(text) {
     showViewOnBoard(reply.view, keepPlugin);
   }
   if (reply.attachments && reply.attachments.length) console.info("Anhänge:", reply.attachments);
+  shareChat(ACTIONS.assistantName, stripActions(reply.text || ""), true);   // + dieser Viewer nach vorne
   assistantMessage(reply.text || "", waiting);       // "denkt nach ..." bleibt, bis die Stimme einsetzt
+}
+
+/* ---- Fenster und Popup synchron ----
+   Jede Chatzeile (Frage, Antwort, push) geht über das Plugin (POST chat/sync) an die anderen
+   offenen Viewer: receiveChatSync zeigt sie dort, ohne zu sprechen. Ein neu geöffneter Viewer
+   bekommt den bisherigen Chat über restoreChat. reveal = Antwort auf eine Frage: Das Plugin holt
+   diesen Viewer nach vorne (Popup bzw. Fenster). */
+const VIEWER_ID = new URLSearchParams(location.search).get("v") || "";
+function shareChat(sender, text, reveal) {
+  if (!assistantViaPlugin || !VIEWER_ID || !(text || reveal)) return;
+  fetch("chat/sync?v=" + encodeURIComponent(VIEWER_ID), {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sender, text: text || "", reveal: !!reveal })
+  }).catch(() => {});
+}
+function receiveChatSync(entry) {
+  if (entry && entry.text) addMessage(entry.sender, entry.text);
+}
+function restoreChat(entries) {
+  if (Array.isArray(entries)) entries.forEach(receiveChatSync);
 }
 
 /* ---- Nachrichten von außen (Toolbar-push über das Plugin, z. B. vom KI-Dienst) ---- */
@@ -194,6 +220,7 @@ let pushChain = Promise.resolve();
 function receivePush(payload) {
   pushChain = pushChain.then(waitForFigure).then(() => {
     if (payload.view) showViewOnBoard(payload.view);
+    shareChat(ACTIONS.assistantName, stripActions(String(payload.text || "")));
     return assistantMessage(String(payload.text || ""));
   }).catch(e => console.warn("push: " + e.message));
 }

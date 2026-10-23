@@ -325,6 +325,14 @@ def _stub_titlebar(_widget, _dark, _caption_color, _text_color) -> None:
     """Ohne services.py bleibt die native Standard-Titelleiste."""
 
 
+def _stub_bring_to_front(window: QWidget) -> None:
+    """Ohne services.py: nur Qt-Mittel (Windows lässt dann evtl. nur die Taskleiste blinken)."""
+    if window.isMinimized() or not window.isVisible():
+        window.showNormal()
+    window.raise_()
+    window.activateWindow()
+
+
 # noinspection PyBroadException
 try:
     import services as _services
@@ -336,6 +344,7 @@ except Exception as _exc:  # noqa: BLE001  # pylint: disable=broad-exception-cau
 MediaControlBridge = getattr(_services, "MediaControlBridge", _StubMediaBridge)
 apply_native_titlebar = getattr(_services, "apply_native_titlebar", _stub_titlebar)
 install_push_handler = getattr(_services, "install_push_handler", None)   # services.push, siehe TrayApp
+bring_to_front = getattr(_services, "bring_to_front", _stub_bring_to_front)
 
 # Werkzeuge der Plugins für den KI-Assistenten (ASSISTANT_TOOLS, siehe plugin_tools.py)
 # noinspection PyBroadException
@@ -2209,7 +2218,7 @@ class TrayApp(QApplication):
         self.tray.setVisible(True)
         self.aboutToQuit.connect(self.teardown)
         if callable(install_push_handler):
-            install_push_handler(self.handle_push)
+            install_push_handler(self.handle_push, self.handle_reveal)
         self.plugin_tools = None
         if PluginToolServer is not None:
             self.plugin_tools = PluginToolServer(os.path.abspath(SCRIPT_FOLDER), load_plugin_module,
@@ -2241,8 +2250,7 @@ class TrayApp(QApplication):
         widget = window.plugin_tab_widget(path) if window.isVisible() and not window.isMinimized() else None
         if widget is not None:
             window.load_plugin_from_path(path, source_widget=window)   # Tab nach vorne
-            window.raise_()
-            window.activateWindow()
+            bring_to_front(window)
         else:
             widget = self.popup.open_plugin(path, window.create_plugin_widget)
             if widget is None:
@@ -2258,6 +2266,25 @@ class TrayApp(QApplication):
                 log.exception("on_push in %s fehlgeschlagen", path)
         elif data is not None:
             log.info("push: %s hat kein on_push(data) - Daten verworfen", os.path.basename(path))
+
+    def handle_reveal(self, widget: QWidget) -> None:
+        """services.reveal(widget): Popup bzw. Hauptfenster mit diesem PluginWidget zeigen und nach
+        vorne holen (z. B. wenn der Assistent antwortet). Zeigt das sichtbare Popup dasselbe Plugin
+        (zweite Instanz, synchron), bleibt es beim Popup - es liegt ohnehin vorne."""
+        window, popup = self.main_window, self.popup
+        tabs = (window.tab_widget.widget(i) for i in range(window.tab_widget.count()))
+        tab = next((t for t in tabs if getattr(t, "plugin_widget", None) is widget), None)
+        page = popup.pages.currentWidget()
+        popup_page = page if page is not popup.explorer_root else None
+        if tab is None and getattr(popup_page, "plugin_widget", None) is not widget:
+            return                                  # nicht (mehr) offen, z. B. auf einem Board
+        path = (tab or popup_page).property("plugin_path")
+        if popup_page is not None and popup_page.property("plugin_path") == path \
+                and (tab is None or popup.isVisible()):
+            popup.show_popup(anchor=self._tray_anchor())
+            return
+        window.load_plugin_from_path(path, source_widget=window)   # Tab nach vorne
+        bring_to_front(window)
 
     def open_plugin_widgets(self, path: str) -> list[QWidget]:
         """Offene PluginWidgets eines Plugins: auf dem Board des Assistenten, Tab im

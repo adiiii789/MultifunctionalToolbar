@@ -15,6 +15,8 @@
 #                           ohne sie zu ersetzen — Snap/Andocken bleiben.
 #   - push:                 Eine Komponente öffnet das Popup mit ihrem Plugin
 #                           von sich aus und übergibt ihm Daten.
+#   - reveal:               Popup/Fenster mit einem PluginWidget nach vorne holen.
+#   - bring_to_front:       Fenster wirklich nach vorne holen (auch aus dem Hintergrund).
 #   - say:                  Der Assistent (ASSISTANT_PLUGIN) sagt einen Text.
 #   - create_services:      Registry aller Dienste für den WebChannel.
 # =============================================================================
@@ -270,16 +272,20 @@ def apply_native_titlebar(widget, dark, caption_color, text_color):
 # =============================================================================
 class _PushHub(QObject):
     requested = pyqtSignal(str, object)   # Plugin-Pfad, Daten
+    reveal_requested = pyqtSignal(object) # PluginWidget
 
 
 _push_hub = None
 
 
-def install_push_handler(handler):
-    """Vom Launcher beim Start im Hauptthread aufgerufen: handler(plugin, data)."""
+def install_push_handler(handler, reveal_handler=None):
+    """Vom Launcher beim Start im Hauptthread aufgerufen: handler(plugin, data),
+    reveal_handler(widget) für reveal()."""
     global _push_hub
     _push_hub = _PushHub()
     _push_hub.requested.connect(handler, Qt.QueuedConnection)
+    if reveal_handler is not None:
+        _push_hub.reveal_requested.connect(reveal_handler, Qt.QueuedConnection)
 
 
 def push(plugin, data=None):
@@ -293,6 +299,43 @@ def push(plugin, data=None):
         return False
     _push_hub.requested.emit(str(plugin), data)
     return True
+
+
+def reveal(widget):
+    """Popup bzw. Hauptfenster, in dem dieses PluginWidget steckt, zeigen und nach vorne holen -
+    z. B. wenn der Assistent antwortet. Aus jedem Thread aufrufbar.
+    Gibt False zurück, wenn kein Launcher läuft."""
+    if _push_hub is None:
+        return False
+    _push_hub.reveal_requested.emit(widget)
+    return True
+
+
+def bring_to_front(window):
+    """Fenster zeigen und wirklich nach vorne holen. Windows lässt ein Programm im Hintergrund
+    das Vordergrundfenster nicht einfach wechseln (activateWindow lässt dann nur die Taskleiste
+    blinken) - kurz "immer oben" setzen und wieder lösen legt es trotzdem über die anderen."""
+    if window.isMinimized() or not window.isVisible():
+        window.showNormal()
+    window.raise_()
+    window.activateWindow()
+    import platform
+    if platform.system().lower() != "windows":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32")
+        user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                        ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        hwnd = int(window.winId())
+        flags = 0x0001 | 0x0002 | 0x0040          # SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW
+        user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, flags)   # HWND_TOPMOST
+        user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, flags)   # HWND_NOTOPMOST
+        user32.SetForegroundWindow(hwnd)
+    except Exception:
+        pass  # dann eben nur raise_/activateWindow
 
 
 # Plugin, das für die Toolbar spricht (relativ zu scripts/) - Ziel von say()
