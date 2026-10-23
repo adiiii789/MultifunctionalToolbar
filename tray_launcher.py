@@ -22,6 +22,7 @@ Die Werte werden per AST gelesen, die Datei wird dafuer NICHT ausgefuehrt::
     PINNED        = 1                            # True oder Zahl: oben anpinnen
     POPUP_WIDTH   = 0.45                         # Popup-Breite beim Öffnen (Anteil Bildschirm oder px)
     POPUP_HEIGHT  = 0.6                          # Popup-Höhe beim Öffnen (Anteil Bildschirm oder px)
+    POPUP_TRANSPARENT = True                     # schmales Popup ohne Hintergrund und Überschrift
 
 Der KI-Assistent kann Plugins steuern, die oben ASSISTANT_TOOLS anlegen (Timer stellen,
 Termin eintragen ...) - Konvention und Ablauf in plugin_tools.py.
@@ -374,7 +375,7 @@ def apply_titlebar_theme(widget: QWidget) -> None:
 PLUGIN_META_KEYS = frozenset({
     "HTML_BUTTON", "BUTTON_HTML", "BUTTON_HTML_FILE", "BUTTON_HEIGHT", "NAME", "ICON",
     "OPACITY", "RUN_AS", "ALLOW_POPUP", "ALLOW_WINDOW", "MEDIA_BRIDGE", "PINNED",
-    "POPUP_WIDTH", "POPUP_HEIGHT", "DESCRIPTION",
+    "POPUP_WIDTH", "POPUP_HEIGHT", "POPUP_TRANSPARENT", "DESCRIPTION",
 })
 _HTML_META_COMMENT = re.compile(r"<!--\s*([A-Za-z_]+)\s*[:=]\s*(.+?)\s*-->")
 
@@ -472,6 +473,7 @@ class PluginMeta:
     pin_rank: int | None = None
     popup_width: float | None = None    # <= 1: Anteil der Bildschirmbreite, sonst Pixel
     popup_height: float | None = None
+    popup_transparent: bool = False     # schmales Popup ohne eigenen Hintergrund (nur der Inhalt des Plugins)
 
     @classmethod
     def from_file(cls, path: str) -> PluginMeta:
@@ -502,6 +504,7 @@ class PluginMeta:
             pin_rank=_pin_rank(raw.get("PINNED")),
             popup_width=_screen_size(raw.get("POPUP_WIDTH")),
             popup_height=_screen_size(raw.get("POPUP_HEIGHT")),
+            popup_transparent=_flag(raw.get("POPUP_TRANSPARENT"), False),
         )
 
     @property
@@ -1682,6 +1685,7 @@ class PopupWindow(ExplorerMixin, QWidget):
     IS_POPUP = True
     SLIDE_IN_OFFSET = 50   # px unterhalb der Endposition
     ANIMATION_MS = 500
+    FADE_OUT_MS, REDRAW_MS, FADE_IN_MS = 110, 70, 160   # Blende beim Größenwechsel
 
     def __init__(self):
         super().__init__()
@@ -1696,6 +1700,7 @@ class PopupWindow(ExplorerMixin, QWidget):
         self.channel = None
         self.plugin_size: tuple[float | None, float | None] | None = None   # Größe des offenen Plugins
         self.plugin_size_active = False
+        self.plugin_transparent = False    # POPUP_TRANSPARENT des offenen Plugins
         if WEBENGINE_AVAILABLE:
             self.toolbar = make_web_view(self)
             self.toolbar.setFixedHeight(40)
@@ -1726,10 +1731,13 @@ class PopupWindow(ExplorerMixin, QWidget):
         self.animation = QPropertyAnimation(self, b"geometry")
         self.animation.setDuration(self.ANIMATION_MS)
         self.animation.setEasingCurve(QEasingCurve.OutCubic)
-        self.resize_animation = QPropertyAnimation(self, b"geometry")
-        self.resize_animation.setDuration(260)
-        self.resize_animation.setEasingCurve(QEasingCurve.OutCubic)
-        self.resize_animation.finished.connect(lambda: self.setFixedSize(self.width_size, self.height_size))
+        # Größenwechsel (⇔ Breit / ⇤ Schmal) aus- und wieder einblenden statt die Geometrie zu animieren:
+        # Webansichten zeichnen langsamer neu, als das Fenster sich bewegt - das Popup rutschte erst zur
+        # Seite und wurde dann kleiner. resize_keeping_corner -> ausblenden -> _apply_resize -> einblenden.
+        self._pending_geometry: QRect | None = None
+        self.resize_animation = QPropertyAnimation(self, b"windowOpacity")
+        self.resize_animation.setEasingCurve(QEasingCurve.InOutQuad)
+        self.resize_animation.finished.connect(self._apply_resize)
 
     @staticmethod
     def _target_size() -> tuple[int, int]:
@@ -1738,7 +1746,16 @@ class PopupWindow(ExplorerMixin, QWidget):
         return int(geo.width() * 0.15), int(geo.height() * 0.5)
 
     def apply_root_style(self) -> None:
-        self.setStyleSheet(f"#popupRoot {{ {panel_css()} }}")
+        # POPUP_TRANSPARENT: schmal ganz ohne Hintergrund und Überschrift (nur der Inhalt), breit wie immer
+        clear = self.plugin_transparent and not self.plugin_size_active
+        self.setStyleSheet("#popupRoot { background: transparent; border: none; }" if clear
+                           else f"#popupRoot {{ {panel_css()} }}")
+        page = self.pages.currentWidget()
+        header = getattr(page, "header", None)
+        if header is not None:
+            header.setVisible(not clear)
+            # Sonst malt im Opaque-Modus der App-Stil (QWidget { background-color }) die Seite grau
+            page.setStyleSheet("#pluginPage { background: transparent; }" if clear else "")
 
     def refresh_styles(self) -> None:
         self.apply_root_style()
@@ -1762,8 +1779,10 @@ class PopupWindow(ExplorerMixin, QWidget):
         else:
             self.plugin_size = POPUP_WIDE_SIZE
         self.plugin_size_active = False  # schmal starten, "⇔ Breit" vergrößert
+        self.plugin_transparent = bool(meta and meta.popup_transparent)
         self.build_toolbar()
         container = QWidget()
+        container.setObjectName("pluginPage")
         container.setProperty("plugin_path", path)
         container.plugin_widget = widget    # für push (open_plugin)
         layout = QVBoxLayout(container)
@@ -1772,9 +1791,11 @@ class PopupWindow(ExplorerMixin, QWidget):
         header.setStyleSheet("font-weight:600;font-size:15px;margin-bottom:6px;")
         layout.addWidget(header)
         layout.addWidget(widget)
+        container.header = header
         self.pages.addWidget(container)
         self.pages.setCurrentWidget(container)
         self.toolbar.setVisible(WEBENGINE_AVAILABLE)
+        self.apply_root_style()
 
     def open_plugin(self, path: str, factory: Callable) -> QWidget | None:
         """Plugin im Popup zeigen und sein PluginWidget zurückgeben (für push). Ist es schon
@@ -1796,6 +1817,8 @@ class PopupWindow(ExplorerMixin, QWidget):
         self.toolbar.setVisible(False)
         self.plugin_size = None
         self.plugin_size_active = False
+        self.plugin_transparent = False
+        self.apply_root_style()
         self.resize_keeping_corner(None, None)    # zurück auf Standardgröße
 
     def toggle_plugin_size(self) -> None:
@@ -1807,6 +1830,7 @@ class PopupWindow(ExplorerMixin, QWidget):
             self.resize_keeping_corner(*self.plugin_size)
         else:
             self.resize_keeping_corner(None, None)
+        self.apply_root_style()
         self.build_toolbar()
 
     def resize_keeping_corner(self, width: float | None, height: float | None) -> None:
@@ -1826,13 +1850,34 @@ class PopupWindow(ExplorerMixin, QWidget):
         if (w, h) == (old.width(), old.height()):
             return
         self.width_size, self.height_size = w, h
-        # Für die Animation die feste Größe kurz lösen
+        if not self.isVisible():
+            self.setFixedSize(w, h)
+            self.move(x, y)
+            return
+        self._pending_geometry = QRect(x, y, w, h)
+        self._fade(0.0, self.FADE_OUT_MS)
+
+    def _fade(self, opacity: float, ms: int) -> None:
+        self.resize_animation.stop()
+        self.resize_animation.setDuration(ms)
+        self.resize_animation.setStartValue(self.windowOpacity())
+        self.resize_animation.setEndValue(opacity)
+        self.resize_animation.start()
+
+    def _apply_resize(self) -> None:
+        """Ende einer Blende: nach dem Ausblenden die neue Größe setzen, nach kurzer Pause einblenden."""
+        if self._pending_geometry is None:
+            return   # Einblenden fertig
+        geometry, self._pending_geometry = self._pending_geometry, None
         self.setMinimumSize(0, 0)
         self.setMaximumSize(16777215, 16777215)
-        self.resize_animation.stop()
-        self.resize_animation.setStartValue(old)
-        self.resize_animation.setEndValue(QRect(x, y, w, h))
-        self.resize_animation.start()
+        self.setGeometry(geometry)
+        self.setFixedSize(geometry.size())
+        QTimer.singleShot(self.REDRAW_MS, self._fade_in)   # Webansichten in der neuen Größe zeichnen lassen
+
+    def _fade_in(self) -> None:
+        if self._pending_geometry is None:   # sonst läuft schon der nächste Größenwechsel
+            self._fade(POPUP_OPACITY, self.FADE_IN_MS)
 
     def _close_active_page(self) -> None:
         page = self.pages.currentWidget()
@@ -1864,6 +1909,9 @@ class PopupWindow(ExplorerMixin, QWidget):
             self.activateWindow()
             return
         self.refresh_styles()
+        self.resize_animation.stop()   # falls beim Schließen noch eine Blende lief
+        self._pending_geometry = None
+        self.setWindowOpacity(POPUP_OPACITY)
         self.width_size, self.height_size = self._wanted_size()
         self.setFixedSize(self.width_size, self.height_size)
         point = anchor or QCursor.pos()

@@ -7,6 +7,8 @@ PINNED = 1
 # Breiter als hoch -> der Viewer schaltet auf das breite Layout mit Board.
 POPUP_WIDTH = 0.5
 POPUP_HEIGHT = 0.6
+# Schmales Popup durchsichtig: nur Figur und Chat (ohne Popup-Hintergrund, Überschrift und Bild); breit wie bisher
+POPUP_TRANSPARENT = True
 
 HTML_BUTTON = True
 BUTTON_HTML = """

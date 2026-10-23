@@ -11,6 +11,8 @@
   }
   body.layout-narrow #stage { opacity: 0; pointer-events: none; }
   body.layout-narrow #stage-narrow-bg { opacity: 1; }
+  /* Schmales Popup: kein Bild - nur Figur und Chat über dem durchsichtigen Popup */
+  body.view-popup.layout-narrow #stage-narrow-bg { opacity: 0; }
   #stage-bg { position: absolute; inset: 0; width: 100%; height: 100%; user-select: none; }
   #board { position: absolute; overflow: hidden; background: white; }
   #board iframe { width: 100%; height: 100%; border: 0; display: block; background: transparent; }

@@ -1,6 +1,6 @@
 # 3D-Assistent – Dateiübersicht
 
-Der Viewer liegt in `scripts/_a3d/viewer/` (Übersicht aller Teile: `../README.md`). Das Plugin `3D_Assistent.py` steuert nur noch die Popup-Größe (`POPUP_WIDTH`, `POPUP_HEIGHT`).
+Der Viewer liegt in `scripts/_a3d/viewer/` (Übersicht aller Teile: `../README.md`). Das Plugin `3D_Assistent.py` steuert nur noch die Popup-Größe (`POPUP_WIDTH`, `POPUP_HEIGHT`) und dass das schmale Popup durchsichtig ist (`POPUP_TRANSPARENT`: ohne Popup-Hintergrund und ohne Bild, nur Figur und Chat).
 
 ```
 _a3d/viewer/

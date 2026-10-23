@@ -77,6 +77,9 @@ const stageEl = document.getElementById("stage");
 const panelEl = document.getElementById("anim-panel");
 const stageImg = document.getElementById("stage-bg");
 const narrowImg = document.getElementById("stage-narrow-bg");
+// Im Popup ohne Bild im schmalen Layout (viewer.css) - dort ist das Popup durchsichtig (POPUP_TRANSPARENT)
+document.body.classList.toggle("view-popup",
+  (new URLSearchParams(location.search).get("mode") || "").toLowerCase() === "popup");
 const boardEl = document.getElementById("board");
 const boardFrame = document.getElementById("board-frame");
 
