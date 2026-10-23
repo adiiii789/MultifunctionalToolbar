@@ -51,7 +51,7 @@ os.chdir(HERE)   # relative Pfade in mcp_servers.json
 
 from backend import config, speech  # noqa: E402
 from backend.assistant import ModelSelection, create_assistant  # noqa: E402
-from backend.assistant.ollama import OllamaError  # noqa: E402
+from backend.assistant.llm import ModelError  # noqa: E402
 from backend.presenter import present  # noqa: E402
 
 log = logging.getLogger("assistant_server")
@@ -236,7 +236,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, SERVICE.models())
             else:
                 self._json(404, {"error": "unbekannter Pfad"})
-        except OllamaError as e:
+        except ModelError as e:
             self._json(503, {"error": str(e)})
 
     def do_POST(self):

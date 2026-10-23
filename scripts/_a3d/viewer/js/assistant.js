@@ -355,7 +355,7 @@ function buildAssistantSection(panel) {
                         "brauchen JavaScript. Nur einschalten, wenn nötig (Seiten laufen trotzdem in einer Sandbox).";
   add(scriptsToggle);
   const model = document.createElement("select");
-  model.title = "Sprachmodell (in Ollama installiert)";
+  model.title = "Sprachmodell (in Ollama installiert, ☁ = Ollama-Cloud, claude-… = Claude API, Claude-Abo = über Claude Code)";
   model.style.cssText = "display:block;width:100%;margin:0.4vh 0;padding:0.4vh;font-size:1.4vh;" +
                         "background:rgba(255,255,255,0.15);color:white;border:none;border-radius:0.4vh;";
   model.onchange = () => selectAssistantModel(model.value);
@@ -398,7 +398,9 @@ function updateAssistantUi() {
     model.append(...assistant.models.map(m => {
       const o = document.createElement("option");
       o.value = m.name;
-      o.textContent = m.name + (m.tools ? "" : " (ohne Werkzeuge)");
+      o.textContent = (m.name.startsWith("cloud/") ? "☁ " + m.name.slice(6)
+                       : m.name.startsWith("abo/") ? "Claude-Abo: " + m.name.slice(4) : m.name) +
+                      (m.tools ? "" : " (ohne Werkzeuge)");
       o.style.color = "black";
       return o;
     }));

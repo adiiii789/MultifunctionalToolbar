@@ -24,6 +24,17 @@ _a3d/ai/
 
 1. [Ollama](https://ollama.com) installieren und ein Modell mit Tool-Calling laden, z. B.
    `ollama pull qwen3:8b` (klein: `llama3.2:3b`).
+   **Oder/zusätzlich Ollama-Cloud**: API-Schlüssel auf ollama.com/settings/keys anlegen und in
+   `data/ollama_api_key.txt` legen (oder Umgebungsvariable `OLLAMA_API_KEY`). Dann stehen die
+   Cloud-Modelle mit ☁ in der Modellauswahl (intern `cloud/<name>`), auch ohne lokales Ollama.
+   **Claude** (Anthropic): API-Schlüssel auf platform.claude.com anlegen und in
+   `data/anthropic_api_key.txt` legen (oder `ANTHROPIC_API_KEY`). Dann stehen `claude-opus-5-5`,
+   `claude-sonnet-5-5` und `claude-haiku-5-5` in der Auswahl; die MCP-Werkzeuge nutzt Claude genauso
+   (Aufrufe laufen lokal über den Dienst). 💭 schaltet bei Claude den Aufwand (aus = `low`, an = `high`).
+   **Claude-Abo** (Pro/Max, ohne API-Schlüssel): Claude Code einmal anmelden (`claude` im Terminal starten
+   und einloggen). Dann stehen „Claude-Abo: haiku“ und „Claude-Abo: sonnet“ in der Auswahl. Das Agent SDK
+   startet Claude Code im Hintergrund; zählt gegen die Abo-Limits (geteilt mit Claude Code), nur für die
+   eigene Nutzung. Ist `ANTHROPIC_API_KEY` als Umgebungsvariable gesetzt, nimmt Claude Code den Schlüssel.
 2. **`setup_ai.bat`** doppelklicken: legt `venv/` an, installiert die Pakete und lädt das
    Whisper-Modell (~480 MB) und die Piper-Stimme (~60 MB) vorab. Liegen sie vom PDA schon in
    `%APPDATA%\PersonalDigitalAgent\speech`, werden sie von dort genommen.
@@ -112,6 +123,9 @@ Die Tonhöhen sind gemessen: Jede Sprecherin landet nach RVC auf Mikus Tonlage (
 |---|---|
 | **Sprache** (Antworten, Spracherkennung, Piper-Stimme, Aktionsnamen): `"en"` oder `"de"` | `LANGUAGE` in `backend/config.py` bzw. `PDA_LANGUAGE` |
 | Ollama-Adresse, Optionen, Werkzeug-Runden | `backend/config.py` |
+| Ollama-Cloud: Schlüssel, Adresse | `data/ollama_api_key.txt` bzw. `OLLAMA_API_KEY`, `OLLAMA_CLOUD_URL` in `backend/config.py` |
+| Claude: Schlüssel, angebotene Modelle | `data/anthropic_api_key.txt` bzw. `ANTHROPIC_API_KEY`, `CLAUDE_MODELS` in `backend/config.py` |
+| Claude-Abo: Modelle (leer = aus) | `CLAUDE_CODE_MODELS` in `backend/config.py` |
 | Denkmodus – im Chat per 💭; `OLLAMA_THINK` gilt nur für Anfragen ohne Angabe | `OLLAMA_THINK` in `backend/config.py` |
 | Kontextfenster (`num_ctx`, Standard 16384 – Ollamas 4096 reicht für Webseiten + Denken nicht) | `OLLAMA_OPTIONS` in `backend/config.py` |
 | Whisper-Modell, Piper-Stimme (Standard je Sprache: `PIPER_VOICES`) | `backend/config.py` bzw. `PDA_WHISPER_MODEL`, `PDA_SPEECH_LANGUAGE`, `PDA_PIPER_VOICE` |

@@ -1,4 +1,4 @@
-"""OllamaAssistant: Assistent mit lokalem Sprachmodell und Werkzeugen (Tool-Calling).
+"""OllamaAssistant: Assistent mit Sprachmodell (Ollama, Ollama-Cloud oder Claude) und Werkzeugen (Tool-Calling).
 
 Ablauf von reply(message):
   1. Feste Befehle (commands.COMMANDS, z. B. "hilfe") direkt beantworten.
@@ -22,8 +22,9 @@ from dataclasses import replace
 
 from backend.assistant.base import AssistantReply
 from backend.assistant.commands import COMMANDS
-from backend.assistant.llm import ChatMessage, ToolCall
-from backend.assistant.ollama import OllamaError, OllamaModel
+from backend.assistant.llm import ChatMessage, ModelError, ToolCall
+from backend.assistant.ollama import OllamaModel
+from backend.assistant.router import ModelRouter
 from backend.assistant.tools import Attachment, ToolProvider, ToolResult, ToolSpec
 from backend.preferences import PreferenceStore
 from backend.views import TemplateView
@@ -85,7 +86,7 @@ _WEEKDAYS_DE = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Sams
 class OllamaAssistant:
     """Erfüllt Assistant und ModelSelection (base.py)."""
 
-    def __init__(self, model: OllamaModel, tools: ToolProvider, preferences: PreferenceStore,
+    def __init__(self, model: ModelRouter | OllamaModel, tools: ToolProvider, preferences: PreferenceStore,
                  instructions: str = "", max_tool_rounds: int = 5, max_history: int = 30,
                  language: str = "de", check_missed_calls: bool = True,
                  clock: Callable[[], datetime.datetime] = datetime.datetime.now):
@@ -112,30 +113,39 @@ class OllamaAssistant:
             if not self._ensure_model():
                 return AssistantReply("In Ollama ist noch kein Modell installiert. "
                                       "Lade eins herunter, z. B. mit: ollama pull llama3.2")
-        except OllamaError as error:
+        except ModelError as error:
             return AssistantReply(str(error))
 
         start = len(self.history)
         self.history.append(ChatMessage("user", message))
         tool_log: list[tuple[ToolCall, ToolResult]] = []
         try:
-            text = self._run(tool_log)
-        except OllamaError as error:
+            if getattr(self.model, "runs_tools", False):
+                text = self._run_agent(tool_log)
+            else:
+                # Systemanweisung einmal je Antwort: Innerhalb der Runde muss alles vor Claudes Denkblöcken
+                # gleich bleiben (sonst sind sie ungültig) - die Uhrzeit darin darf nicht mitten drin wechseln.
+                text = self._run(self._system_message(), tool_log)
+        except ModelError as error:
             del self.history[start:]   # misslungene Runde nicht im Verlauf behalten
-            return AssistantReply(f"Fehler von Ollama ({self.model.name}): {error}")
-        # Überlegungen braucht das Modell nur innerhalb der Runde (bei Werkzeugen) - danach weg, spart Kontext
-        self.history[start:] = [replace(m, thinking="") if m.thinking else m for m in self.history[start:]]
+            return AssistantReply(f"Fehler vom Sprachmodell ({self.model.name}): {error}")
+        # Überlegungen braucht das Modell nur innerhalb der Runde (bei Werkzeugen) - danach weg, spart Kontext.
+        # Claudes Denkblöcke (provider_content) gelten ohnehin nur, solange alles davor gleich bleibt.
+        self.history[start:] = [replace(m, thinking="", provider_content=()) if m.thinking or m.provider_content
+                                else m for m in self.history[start:]]
         self._trim_history()
         return AssistantReply(text, _tool_view(tool_log) if tool_log else None, _attachments(tool_log),
                               _page_candidates(tool_log))
 
-    def _run(self, tool_log: list[tuple[ToolCall, ToolResult]]) -> str:
+    def _run(self, system: ChatMessage, tool_log: list[tuple[ToolCall, ToolResult]]) -> str:
         tools = self.tools.list_tools()
+        # Große Modelle (Claude) vergessen keine Aufrufe - die Nachprüfung kostete nur Anfragen.
+        check_missed_calls = self.check_missed_calls and not getattr(self.model, "reliable_tool_calls", False)
         checked = False
         for round_ in range(self.max_tool_rounds + 1):
             # In der letzten Runde keine Werkzeuge mehr anbieten: Das Modell muss antworten.
             offered = tools if round_ < self.max_tool_rounds else []
-            response = self.model.chat([self._system_message(), *self.history], offered)
+            response = self.model.chat([system, *self.history], offered)
             message = response.message
             calls = message.tool_calls or calls_written_as_text(message.content, offered)
             if calls and not message.tool_calls:
@@ -146,25 +156,39 @@ class OllamaAssistant:
                 content = _TEXT_CALL.sub(lambda m: "" if m.group(1) in names else m.group(0), message.content)
                 message = replace(message, content=content.strip(), tool_calls=calls)
             self.history.append(message)
-            if not calls and offered and not tool_log and not checked and self.check_missed_calls:
+            if not calls and offered and not tool_log and not checked and check_missed_calls:
                 # Ohne Werkzeug geantwortet: Braucht die Bitte eins, den Aufruf nachholen
                 # (der Entwurf fällt weg, die Antwort entsteht danach mit dem Ergebnis neu).
                 checked = True
-                missed = self._missed_calls(offered)
+                missed = self._missed_calls(system, offered)
                 if missed is not None:
                     self.history[-1] = message = missed
                     calls = missed.tool_calls
             if not calls:
-                text = message.content.strip() or self._answer_without_thinking()
+                text = message.content.strip() or self._answer_without_thinking(system)
                 return text or "(Das Modell hat keine Antwort geliefert.)"
             for call in calls:
                 result = self._call_tool(call)
                 tool_log.append((call, result))
                 content = ("Fehler: " if result.is_error else "") + result.content[:MAX_TOOL_RESULT_CHARS]
-                self.history.append(ChatMessage("tool", content, tool_name=call.name))
+                self.history.append(ChatMessage("tool", content, tool_name=call.name, tool_call_id=call.id))
         return "Ich habe zu viele Werkzeuge nacheinander aufgerufen und breche ab. Versuch es bitte genauer."
 
-    def _missed_calls(self, offered: list[ToolSpec]) -> ChatMessage | None:
+    def _run_agent(self, tool_log: list[tuple[ToolCall, ToolResult]]) -> str:
+        """Modelle mit eigener Werkzeug-Schleife (Claude-Abo über Claude Code): eine Anfrage, die
+        Werkzeuge ruft es über call() auf. Die Uhrzeit geht mit der Nachricht statt in der
+        Systemanweisung - so bleibt die Systemanweisung gleich und die Sitzung kann weiterlaufen."""
+        def call(tool_call: ToolCall) -> ToolResult:
+            result = self._call_tool(tool_call)
+            tool_log.append((tool_call, result))
+            return replace(result, content=result.content[:MAX_TOOL_RESULT_CHARS])
+
+        answer = self.model.respond(self._system_message(with_clock=False).content, self.history,
+                                    _NOW[self.language](self.clock()), self.tools.list_tools(), call)
+        self.history.append(answer)
+        return answer.content or "(Das Modell hat keine Antwort geliefert.)"
+
+    def _missed_calls(self, system: ChatMessage, offered: list[ToolSpec]) -> ChatMessage | None:
         """Antwort ohne Werkzeug: Braucht die letzte Bitte eins? Dann den Aufruf ohne den Entwurf
         neu anfordern. Ergebnis (ersetzt den Entwurf): Nachricht mit den Aufrufen, ohne Aufruf eine
         ehrliche Fehlermeldung - oder None, wenn kein Werkzeug nötig ist."""
@@ -177,13 +201,13 @@ class OllamaAssistant:
                 return None
             for attempt in range(1, _CALL_NOW_ATTEMPTS + 1):
                 retry = self._chat_without_thinking(
-                    [self._system_message(), *self.history[:-1], ChatMessage("user", _CALL_NOW)], offered)
+                    [system, *self.history[:-1], ChatMessage("user", _CALL_NOW)], offered)
                 calls = retry.tool_calls or calls_written_as_text(retry.content, offered)
                 if calls:
                     log.info("Werkzeugaufruf fehlte - nachgeholt (Versuch %d): %s", attempt,
                              [call.name for call in calls])
                     return ChatMessage("assistant", "", tool_calls=tuple(calls))
-        except OllamaError as error:
+        except ModelError as error:
             log.warning("Prüfung auf vergessenen Werkzeugaufruf fehlgeschlagen: %s", error)
             return None
         log.info("Bitte braucht laut Prüfung ein Werkzeug, aber kein Aufruf kam - Antwort ersetzt")
@@ -199,7 +223,7 @@ class OllamaAssistant:
             if thinking:
                 self.model.think = thinking
 
-    def _answer_without_thinking(self) -> str:
+    def _answer_without_thinking(self, system: ChatMessage) -> str:
         """Denkmodus: Manchmal steht die Antwort nur in den Überlegungen und der Text bleibt leer.
         Dann einmal ohne Denken und ohne Werkzeuge nachfragen (ersetzt die leere Antwort)."""
         if not getattr(self.model, "think", None):
@@ -208,7 +232,7 @@ class OllamaAssistant:
         self.history.pop()
         self.model.think = False
         try:
-            response = self.model.chat([self._system_message(), *self.history], [])
+            response = self.model.chat([system, *self.history], [])
         finally:
             self.model.think = True
         self.history.append(response.message)
@@ -222,9 +246,10 @@ class OllamaAssistant:
             log.warning("Werkzeug %s fehlgeschlagen: %s", call.name, error)
             return ToolResult(str(error), is_error=True)
 
-    def _system_message(self) -> ChatMessage:
-        now = self.clock()
-        parts = [BASE_INSTRUCTIONS[self.language], _NOW[self.language](now)]
+    def _system_message(self, with_clock: bool = True) -> ChatMessage:
+        parts = [BASE_INSTRUCTIONS[self.language]]
+        if with_clock:
+            parts.append(_NOW[self.language](self.clock()))
         context = {k: v for k, v in self.preferences.all().items() if k != MODEL_PREFERENCE}
         if context:
             parts.append(_KNOWN_ABOUT_USER[self.language] + json.dumps(context, ensure_ascii=False))
@@ -250,7 +275,7 @@ class OllamaAssistant:
 
     def select_model(self, name: str) -> None:
         if name not in self.model.installed():
-            raise ValueError(f"Modell {name!r} ist in Ollama nicht installiert")
+            raise ValueError(f"Modell {name!r} ist nicht verfügbar")
         self.model.name = name
         self.preferences.set(MODEL_PREFERENCE, name)
 
