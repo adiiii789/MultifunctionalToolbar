@@ -51,10 +51,6 @@ class ChatMessage:
 class ModelResponse:
     message: ChatMessage
 
-    @property
-    def wants_tools(self) -> bool:
-        return bool(self.message.tool_calls)
-
 
 @runtime_checkable
 class LanguageModel(Protocol):

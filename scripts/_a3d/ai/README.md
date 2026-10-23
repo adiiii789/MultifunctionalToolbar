@@ -41,7 +41,7 @@ _a3d/ai/
 3. Toolbar neu starten.
 
 Warum ein eigener Prozess? In der Toolbar ist PyQt5 schon geladen, und dann stürzt der Import
-von onnxruntime (Piper, Whisper) ab – siehe `load_before_qt` in `backend/speech.py`.
+von onnxruntime (Piper, Whisper) ab – siehe `backend/speech.py`.
 
 ## Im Viewer
 
@@ -151,5 +151,7 @@ Nach Änderungen die Toolbar neu starten.
 `assistant/__init__.py` (reicht `OLLAMA_THINK` und `LANGUAGE` durch), `assistant/ollama_assistant.py`
 (`BASE_INSTRUCTIONS` je Sprache: Miku, gesprochene Antworten; leere Antwort im Denkmodus -> Nachfrage
 ohne Denken; als Text geschriebene Werkzeugaufrufe wie `[web_search query="…"]` werden ausgeführt,
-`calls_written_as_text`), `assistant/llm.py` + `ollama.py` (Feld `thinking` im Verlauf), neu: `presenter.py`,
+`calls_written_as_text`), `assistant/llm.py` + `ollama.py` (Feld `thinking` im Verlauf), `speech.py` (ohne
+Abspielen über die Lautsprecher - das macht der Viewer; `create_synthesizer`), `views.py` (ohne
+`view_from_dict`), neu: `presenter.py`, `assistant/router.py`, `assistant/claude.py`, `assistant/claude_code.py`,
 `mcp_servers/web.py`, `mcp_servers/web_server.py`.

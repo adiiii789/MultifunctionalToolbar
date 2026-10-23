@@ -1,6 +1,7 @@
 """Integrationen externer Dienste - jede als ToolProvider (backend/assistant/tools.py).
 
-Noch leer. Geplante Integrationen und welche Fähigkeit (backend/assistant/skills/) sie nutzt:
+Umgesetzt: toolbar.py (Werkzeuge der Toolbar-Plugins), mcp_client.py (MCP-Server aus mcp_servers.json).
+Geplante Integrationen und welche Fähigkeit (backend/assistant/skills/) sie nutzt:
 
   Integration          Fähigkeit
   -------------------  ---------------------------------------------

@@ -3,7 +3,7 @@
 Der PDA-Assistent (backend/: Ollama + MCP-Werkzeuge, Whisper, Piper) als kleiner
 HTTP-Dienst, nur auf 127.0.0.1. Er läuft in einem eigenen Prozess mit eigener venv
 (setup_ai.bat): Im Toolbar-Prozess ist PyQt5 schon geladen, und dann stürzt der Import
-von onnxruntime (Piper, Whisper-Sprachfilter) ab - siehe backend/speech.py, load_before_qt.
+von onnxruntime (Piper, Whisper-Sprachfilter) ab - siehe backend/speech.py.
 
 Der Viewer fragt nicht direkt hier an, sondern über den Asset-Server des Plugins
 (/ai/<pfad> wird 1:1 hierher weitergereicht, /tts fällt hierher zurück).
@@ -156,14 +156,7 @@ def speech_input():
 
 @cache
 def synthesizer():
-    """Piper, ersatzweise Windows-Stimme - ohne Abspielen: der Viewer spielt die WAV selbst
-    (Lautstärke, Mund folgt dem Audio)."""
-    synthesizers = []
-    if speech._installed("piper"):
-        synthesizers.append(speech.PiperSynthesizer(config.PIPER_VOICE, config.SPEECH_DIR / "piper"))
-    if speech._installed("win32com"):
-        synthesizers.append(speech.SapiSynthesizer(config.SPEECH_LANGUAGE or None))
-    return speech.FallbackSynthesizer(synthesizers) if synthesizers else None
+    return speech.create_synthesizer()
 
 
 def tts_wav(text: str) -> bytes:

@@ -1,4 +1,4 @@
-"""Einfache Werkzeuge ohne Abhängigkeiten - genutzt von pda_server.py und demo_server.py."""
+"""Einfache Werkzeuge ohne Abhängigkeiten - genutzt von pda_server.py."""
 from __future__ import annotations
 
 import ast
