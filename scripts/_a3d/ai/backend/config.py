@@ -12,7 +12,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent   # scripts/_a3d/ai
 
 # Sprache des Assistenten: "en" (Englisch) oder "de" (Deutsch). Bestimmt die Antworten des
 # Sprachmodells, die Anleitung für die [aktionen], die Spracherkennung und die Piper-Stimme.
-LANGUAGE = os.environ.get("PDA_LANGUAGE", "en")
+LANGUAGE = os.environ.get("PDA_LANGUAGE", "de")
 
 # "ollama" (lokales Sprachmodell + MCP-Werkzeuge) oder "commands" (feste Befehle, ohne KI).
 # Siehe backend/assistant/__init__.py (_BACKENDS).

@@ -45,7 +45,7 @@ von onnxruntime (Piper, Whisper) ab – siehe `backend/speech.py`.
 
 ## Im Viewer
 
-- **Chat**: Nachricht tippen → die KI antwortet (Sprache: `LANGUAGE`, Standard Englisch) („denkt nach …“, die Figur schaut nachdenklich).
+- **Chat**: Nachricht tippen → die KI antwortet (Sprache: `LANGUAGE`, Standard Deutsch) („denkt nach …“, die Figur schaut nachdenklich).
   Die Antwort darf `[gesture.wave]`, `[expression.happy]`, `[walk.Board Mitte]` enthalten
   (auf Deutsch `[geste.winken]` …) –
   welche Namen es gibt, schickt der Viewer bei jeder Nachricht mit.
