@@ -186,6 +186,9 @@ scripts/_a3d/tts/tts_*
 scripts/_a3d/tts/cache/
 
 scripts/_a3d/viewer/tts/*
+# Vom Viewer selbst geschrieben (3D Assistent.py, WRITABLE_JSON): Blick-Kalibrierung je Modus, KI-Einstellungen
+scripts/_a3d/viewer/look_calibration_*.json
+scripts/_a3d/viewer/assistant_settings.json
 
 
 
