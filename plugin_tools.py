@@ -95,7 +95,30 @@ class PluginTool:
     board: bool = True
 
 
-# --- ASSISTANT_TOOLS per AST lesen ----------------------------------------------
+# --- Plugin-Dateien per AST lesen ------------------------------------------------
+def _plugin_files(script_root: str, extensions: tuple[str, ...]):
+    """(Ordner, Datei, Pfad) aller Plugin-Dateien unter script_root, sortiert - wie der Explorer
+    ohne Ordner und Dateien mit "_" am Anfang."""
+    for folder, dirs, files in os.walk(script_root):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(("_", ".")) and d != "__pycache__")
+        for file in sorted(files):
+            if not file.startswith("_") and file.lower().endswith(extensions):
+                yield folder, file, os.path.join(folder, file)
+
+
+def _literal_assignments(tree: ast.Module, keys) -> dict:
+    """Werte der Zuweisungen KEY = <Literal> auf Modulebene (Nicht-Literale übersprungen)."""
+    values = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name) and node.targets[0].id in keys):
+            try:
+                values[node.targets[0].id] = ast.literal_eval(node.value)
+            except (ValueError, TypeError, SyntaxError):
+                pass
+    return values
+
+
 _cache: dict[str, tuple[float, dict]] = {}   # Pfad -> (mtime, ASSISTANT_TOOLS)
 
 
@@ -112,12 +135,9 @@ def read_assistant_tools(path: str) -> dict:
     try:
         with open(path, encoding="utf-8") as f:
             source = f.read()
-        if "ASSISTANT_TOOLS" in source:
-            for node in ast.parse(source).body:
-                if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                        and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "ASSISTANT_TOOLS"):
-                    value = ast.literal_eval(node.value)
-                    tools = value if isinstance(value, dict) else {}
+        if "ASSISTANT_TOOLS" in source:      # schneller Vorab-Test: die meisten Plugins haben keine
+            value = _literal_assignments(ast.parse(source), {"ASSISTANT_TOOLS"}).get("ASSISTANT_TOOLS")
+            tools = value if isinstance(value, dict) else {}
     except (OSError, SyntaxError, ValueError) as error:
         log.warning("ASSISTANT_TOOLS in %s nicht lesbar: %s", path, error)
     _cache[path] = (mtime, tools)
@@ -126,14 +146,8 @@ def read_assistant_tools(path: str) -> dict:
 
 def _plugin_name(path: str) -> str:
     """Anzeigename: NAME aus der Datei, sonst der Dateiname."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            match = re.search(r'^NAME\s*=\s*["\'](.+?)["\']', f.read(), re.M)
-        if match:
-            return match.group(1)
-    except OSError:
-        pass
-    return os.path.splitext(os.path.basename(path))[0]
+    name = read_plugin_info(path).get("NAME")
+    return name if isinstance(name, str) and name else os.path.splitext(os.path.basename(path))[0]
 
 
 def _slug(text: str) -> str:
@@ -144,30 +158,25 @@ def scan_tools(script_root: str) -> list[PluginTool]:
     """Alle Werkzeuge aller Plugins unter script_root (Ordner mit "_" am Anfang zählen nicht)."""
     found: list[PluginTool] = []
     names: set[str] = set()
-    for folder, dirs, files in os.walk(script_root):
-        dirs[:] = sorted(d for d in dirs if not d.startswith(("_", ".")) and d != "__pycache__")
-        for file in sorted(files):
-            if not file.endswith(".py") or file.startswith("_"):
+    for _folder, _file, path in _plugin_files(script_root, (".py",)):
+        tools = read_assistant_tools(path)
+        if not tools:
+            continue
+        plugin = _plugin_name(path)
+        for tool, spec in tools.items():
+            if not isinstance(spec, dict) or not isinstance(spec.get("description"), str):
+                log.warning("Werkzeug %r in %s: description fehlt", tool, path)
                 continue
-            path = os.path.join(folder, file)
-            tools = read_assistant_tools(path)
-            if not tools:
-                continue
-            plugin = _plugin_name(path)
-            for tool, spec in tools.items():
-                if not isinstance(spec, dict) or not isinstance(spec.get("description"), str):
-                    log.warning("Werkzeug %r in %s: description fehlt", tool, path)
-                    continue
-                name = _slug(str(tool))
-                if name in names:                        # zwei Plugins mit gleichem Namen
-                    name = f"{_slug(plugin)}_{name}"
-                names.add(name)
-                schema = {"type": "object", "properties": dict(spec.get("parameters") or {})}
-                if spec.get("required"):
-                    schema["required"] = list(spec["required"])
-                found.append(PluginTool(name, str(tool), path, plugin, f"[{plugin}] {spec['description']}",
-                                        schema, bool(spec.get("window")), bool(spec.get("show")),
-                                        bool(spec.get("board", True))))
+            name = _slug(str(tool))
+            if name in names:                        # zwei Plugins mit gleichem Namen
+                name = f"{_slug(plugin)}_{name}"
+            names.add(name)
+            schema = {"type": "object", "properties": dict(spec.get("parameters") or {})}
+            if spec.get("required"):
+                schema["required"] = list(spec["required"])
+            found.append(PluginTool(name, str(tool), path, plugin, f"[{plugin}] {spec['description']}",
+                                    schema, bool(spec.get("window")), bool(spec.get("show")),
+                                    bool(spec.get("board", True))))
     return found
 
 
@@ -205,13 +214,7 @@ def read_plugin_info(path: str) -> dict:
             info = {m.group(1).upper(): m.group(2).strip().strip("\"'") for m in _HTML_META.finditer(source[:4096])}
         else:
             tree = ast.parse(source)
-            for node in tree.body:
-                if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                        and isinstance(node.targets[0], ast.Name) and node.targets[0].id in _INFO_KEYS):
-                    try:
-                        info[node.targets[0].id] = ast.literal_eval(node.value)
-                    except (ValueError, TypeError, SyntaxError):
-                        pass
+            info = _literal_assignments(tree, _INFO_KEYS)
             info["__doc__"] = ast.get_docstring(tree) or ""
     except (OSError, SyntaxError, ValueError) as error:
         log.warning("Plugin-Angaben in %s nicht lesbar: %s", path, error)
@@ -244,26 +247,21 @@ def list_plugins(script_root: str, query: str = "") -> list[dict]:
         tools_by_path.setdefault(tool.plugin_path, []).append(tool.name)
     query = (query or "").strip().lower()
     plugins = []
-    for folder, dirs, files in os.walk(script_root):
-        dirs[:] = sorted(d for d in dirs if not d.startswith(("_", ".")) and d != "__pycache__")
-        for file in sorted(files):
-            if file.startswith("_") or not file.lower().endswith((".py", ".html")):
-                continue
-            path = os.path.join(folder, file)
-            info = read_plugin_info(path)
-            if info.get("ALLOW_POPUP") is False and info.get("ALLOW_WINDOW") is False:
-                continue                              # in der Toolbar nirgends zu sehen
-            entry = {"name": str(info.get("NAME") or os.path.splitext(file)[0]),
-                     "folder": "" if folder == script_root
-                     else os.path.relpath(folder, script_root).replace(os.sep, "/"),
-                     "description": _describe(info)}
-            if info.get("ICON"):
-                entry["icon"] = str(info["ICON"])
-            if tools_by_path.get(path):
-                entry["assistant_tools"] = tools_by_path[path]
-            if query and query not in " ".join(str(v) for v in entry.values()).lower():
-                continue
-            plugins.append(entry)
+    for folder, file, path in _plugin_files(script_root, (".py", ".html")):
+        info = read_plugin_info(path)
+        if info.get("ALLOW_POPUP") is False and info.get("ALLOW_WINDOW") is False:
+            continue                              # in der Toolbar nirgends zu sehen
+        entry = {"name": str(info.get("NAME") or os.path.splitext(file)[0]),
+                 "folder": "" if folder == script_root
+                 else os.path.relpath(folder, script_root).replace(os.sep, "/"),
+                 "description": _describe(info)}
+        if info.get("ICON"):
+            entry["icon"] = str(info["ICON"])
+        if tools_by_path.get(path):
+            entry["assistant_tools"] = tools_by_path[path]
+        if query and query not in " ".join(str(v) for v in entry.values()).lower():
+            continue
+        plugins.append(entry)
     return plugins
 
 

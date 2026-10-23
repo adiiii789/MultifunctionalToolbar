@@ -131,9 +131,14 @@ _lock = _SHARED.lock
 # localhost-Port. Er beendet sich selbst, wenn die Toolbar endet (--parent-pid).
 # =============================================================================
 class LocalService:
-    folder = ""                # Ordner mit venv/ und dem Skript
+    folder = ""                # Ordner mit venv/ und dem Skript (scripts/_a3d/<name>, setup_<name>.bat)
     script = ""                # Server-Skript, versteht --port und --parent-pid
     label = ""                 # für Konsolenmeldungen
+    switch = ""                # Schalter oben im Plugin, der den Dienst abschaltet (für die Meldung)
+    idle_message = ""          # Status, solange der Dienst noch nicht läuft
+    ready_timeout_s = 60       # _wait_ready: so lange auf "bereit" warten
+    ready_timeout_message = "Zeitüberschreitung beim Start"
+    ready_poll_s = 0.5
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -172,12 +177,13 @@ class LocalService:
             self.port = s.getsockname()[1]
             s.close()
             os.makedirs(os.path.join(self.folder, "logs"), exist_ok=True)
-            log = open(os.path.join(self.folder, "logs", "dienst_start.log"), "w", encoding="utf-8")
-            self.proc = subprocess.Popen(
-                [self.python_exe(), self.script, "--port", str(self.port),
-                 "--parent-pid", str(os.getpid()), *self.start_args()],
-                cwd=self.folder, env={**os.environ, **self.start_env()}, stdout=log, stderr=subprocess.STDOUT,
-                creationflags=0x08000000 if os.name == "nt" else 0)   # CREATE_NO_WINDOW
+            # Der Dienst schreibt in seine eigene Kopie des Handles - unsere kann gleich wieder zu
+            with open(os.path.join(self.folder, "logs", "dienst_start.log"), "w", encoding="utf-8") as start_log:
+                self.proc = subprocess.Popen(
+                    [self.python_exe(), self.script, "--port", str(self.port),
+                     "--parent-pid", str(os.getpid()), *self.start_args()],
+                    cwd=self.folder, env={**os.environ, **self.start_env()}, stdout=start_log,
+                    stderr=subprocess.STDOUT, creationflags=0x08000000 if os.name == "nt" else 0)  # CREATE_NO_WINDOW
             print(f"[3D Assistent] {self.label} gestartet (Port {self.port})")
             return True
 
@@ -193,6 +199,41 @@ class LocalService:
 
     def _url(self, path):
         return "http://127.0.0.1:%d%s" % (self.port, path)
+
+    def status(self, start=True):
+        """Zustand für Viewer und Panel: disabled, missing, idle, starting, error oder ready.
+        start: einen nicht laufenden Dienst dafür starten (sonst "idle")."""
+        name = os.path.basename(self.folder)
+        if not self.enabled():
+            return {"state": "disabled", "message": f"Im Plugin ausgeschaltet ({self.switch})"}
+        if not self.installed():
+            return {"state": "missing", "message": f"Nicht eingerichtet: scripts/_a3d/{name}/setup_{name}.bat ausführen"}
+        if not self.running():
+            if not start:
+                return {"state": "idle", "message": self.idle_message}
+            self.ensure_started()
+        if not self.running():
+            return {"state": "error", "message": f"Dienst beendet - siehe scripts/_a3d/{name}/logs/"}
+        try:
+            health = json.loads(self._opener.open(self._health_request(), timeout=3).read())
+        except Exception:
+            return {"state": "starting", "message": "Dienst startet ..."}
+        return self._state_from_health(health)
+
+    def _health_request(self):
+        return self._url("/health")
+
+    def _state_from_health(self, health):
+        return dict(health, state="ready")
+
+    def _wait_ready(self):
+        t0 = time.time()
+        while time.time() - t0 < self.ready_timeout_s:
+            st = self.status()
+            if st["state"] in ("ready", "error", "missing", "disabled"):
+                return st
+            time.sleep(self.ready_poll_s)
+        return {"state": "error", "message": self.ready_timeout_message}
 
 
 # =============================================================================
@@ -232,6 +273,11 @@ class TtsService(LocalService):
     folder = TTS_DIR
     script = "miku_tts_server.py"
     label = "TTS-Dienst"
+    switch = "TTS_ENABLED"
+    idle_message = "Startet beim ersten Sprechen"
+    ready_timeout_s = 300      # Stimmmodell laden dauert
+    ready_timeout_message = "Zeitüberschreitung beim Laden"
+    ready_poll_s = 1
 
     def __init__(self):
         super().__init__()
@@ -246,35 +292,12 @@ class TtsService(LocalService):
     def installed(self):
         return super().installed() and os.path.isdir(os.path.join(TTS_DIR, "models"))
 
-    def status(self, start=True):
-        if not TTS_ENABLED:
-            return {"state": "disabled", "message": "Im Plugin ausgeschaltet (TTS_ENABLED)"}
-        if not self.installed():
-            return {"state": "missing", "message": "Nicht eingerichtet: scripts/_a3d/tts/setup_tts.bat ausführen"}
-        if not self.running():
-            if not start:
-                return {"state": "idle", "message": "Startet beim ersten Sprechen"}
-            self.ensure_started()
-        if not self.running():
-            return {"state": "error", "message": "Dienst beendet - siehe scripts/_a3d/tts/logs/"}
-        try:
-            h = json.loads(self._opener.open(self._url("/health"), timeout=3).read())
-        except Exception:
-            return {"state": "starting", "message": "Dienst startet ..."}
+    def _state_from_health(self, h):
         if h.get("ready"):
             return {"state": "ready", "device": h.get("device"), "model": h.get("model"), "voice": h.get("voice")}
         if h.get("error"):
             return {"state": "error", "message": h["error"]}
         return {"state": "starting", "message": "Stimmmodell wird geladen ..."}
-
-    def _wait_ready(self, seconds=300):
-        t0 = time.time()
-        while time.time() - t0 < seconds:
-            st = self.status()
-            if st["state"] in ("ready", "error", "missing"):
-                return st
-            time.sleep(1)
-        return {"state": "error", "message": "Zeitüberschreitung beim Laden"}
 
     def _post(self, text, overrides):
         body = json.dumps(dict(overrides, text=text)).encode("utf-8")
@@ -330,6 +353,8 @@ class AiService(LocalService):
     folder = AI_DIR
     script = "assistant_server.py"
     label = "KI-Dienst"
+    switch = "AI_ENABLED"
+    idle_message = "Startet bei der ersten Nachricht"
 
     def enabled(self):
         return AI_ENABLED
@@ -339,32 +364,8 @@ class AiService(LocalService):
         return {"A3D_PUSH_URL": "http://127.0.0.1:%d/push?k=%s" % (ensure_server(), _SHARED.token),
                 "A3D_AI_TOKEN": _SHARED.ai_token}       # der Dienst nimmt nur Anfragen mit diesem Token an
 
-    def status(self, start=True):
-        if not AI_ENABLED:
-            return {"state": "disabled", "message": "Im Plugin ausgeschaltet (AI_ENABLED)"}
-        if not self.installed():
-            return {"state": "missing", "message": "Nicht eingerichtet: scripts/_a3d/ai/setup_ai.bat ausführen"}
-        if not self.running():
-            if not start:
-                return {"state": "idle", "message": "Startet bei der ersten Nachricht"}
-            self.ensure_started()
-        if not self.running():
-            return {"state": "error", "message": "Dienst beendet - siehe scripts/_a3d/ai/logs/"}
-        try:
-            req = urllib.request.Request(self._url("/health"), headers={TOKEN_HEADER: _SHARED.ai_token})
-            health = json.loads(self._opener.open(req, timeout=3).read())
-        except Exception:
-            return {"state": "starting", "message": "Dienst startet ..."}
-        return dict(health, state="ready")
-
-    def _wait_ready(self, seconds=60):
-        t0 = time.time()
-        while time.time() - t0 < seconds:
-            st = self.status()
-            if st["state"] in ("ready", "error", "missing", "disabled"):
-                return st
-            time.sleep(0.5)
-        return {"state": "error", "message": "Zeitüberschreitung beim Start"}
+    def _health_request(self):
+        return urllib.request.Request(self._url("/health"), headers={TOKEN_HEADER: _SHARED.ai_token})
 
     def request(self, method, path, body=None):
         """Anfrage an den Dienst -> (HTTP-Code, Content-Type, Bytes). Startet ihn bei Bedarf."""
@@ -530,6 +531,16 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _read_json(self, limit):
+        """JSON-Objekt aus dem Rumpf (1 bis limit Bytes), sonst ValueError."""
+        length = int(self.headers.get("Content-Length", 0))
+        if not 0 < length <= limit:
+            raise ValueError("Größe")
+        data = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("kein Objekt")
+        return data
+
     def _authorized(self):
         """Token aus dem Header (Viewer, js/token.js) oder ?k= (push des KI-Dienstes)."""
         sent = self.headers.get(TOKEN_HEADER) or parse_qs(urlparse(self.path).query).get("k", [""])[0]
@@ -597,13 +608,7 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         if stream is None:
             return
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            if not 0 < length <= 4096:
-                raise ValueError("Größe")
-            event = json.loads(self.rfile.read(length).decode("utf-8"))
-            if not isinstance(event, dict):
-                raise ValueError("kein Objekt")
-            stream.input.emit(event)
+            stream.input.emit(self._read_json(4096))
         except RuntimeError:                # Fenster inzwischen zu
             self._send_json(404, {"error": "kein Plugin auf dem Board"})
             return
@@ -637,10 +642,7 @@ class _QuietHandler(SimpleHTTPRequestHandler):
     def _do_tts(self):
         """POST /tts {"text": "...", "voice": "<id aus TTS_VOICES>"} -> {"url": "tts/<hash>.wav"}"""
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            if not 0 < length <= MAX_POST_BYTES:
-                raise ValueError("Größe")
-            req = json.loads(self.rfile.read(length).decode("utf-8"))
+            req = self._read_json(MAX_POST_BYTES)
             text, voice_id = str(req.get("text", "")).strip(), str(req.get("voice", ""))
             if not text:
                 raise ValueError("kein Text")
@@ -657,11 +659,8 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         """POST /push {"text", "view"} (vom KI-Dienst, backend/presenter.push): Toolbar-Popup
         mit der Figur öffnen, sie sagt den Text (services.push -> PluginWidget.on_push)."""
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            if not 0 < length <= MAX_AI_POST_BYTES:
-                raise ValueError("Größe")
-            data = json.loads(self.rfile.read(length).decode("utf-8"))
-            if not isinstance(data, dict) or not str(data.get("text", "")).strip():
+            data = self._read_json(MAX_AI_POST_BYTES)
+            if not str(data.get("text", "")).strip():
                 raise ValueError("kein Text")
         except Exception as e:
             self._send_json(400, {"error": str(e)})
@@ -674,12 +673,7 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         reveal: Antwort auf eine Frage - der fragende Viewer kommt nach vorne."""
         viewer = parse_qs(urlparse(self.path).query).get("v", [""])[0]
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            if not 0 < length <= MAX_AI_POST_BYTES:
-                raise ValueError("Größe")
-            data = json.loads(self.rfile.read(length).decode("utf-8"))
-            if not isinstance(data, dict):
-                raise ValueError("kein Objekt")
+            data = self._read_json(MAX_AI_POST_BYTES)
         except Exception as e:
             self._send_json(400, {"error": str(e)})
             return
@@ -723,12 +717,7 @@ class _QuietHandler(SimpleHTTPRequestHandler):
             self.send_error(404)
             return
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            if not 0 < length <= MAX_POST_BYTES:
-                raise ValueError("Größe")
-            data = json.loads(self.rfile.read(length).decode("utf-8"))
-            if not isinstance(data, dict):
-                raise ValueError("kein Objekt")
+            data = self._read_json(MAX_POST_BYTES)
             target = os.path.join(ASSET_DIR, path.lstrip("/"))
             tmp = target + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -904,7 +893,9 @@ def _paint_widget(root, widget, painter, frames, fill):
             _paint_widget(root, child, painter, frames, fill)
 
 
-_BOARD_BUTTONS = {0: Qt.LeftButton, 1: Qt.MiddleButton, 2: Qt.RightButton}
+_BOARD_BUTTONS = {0: Qt.LeftButton, 1: Qt.MiddleButton, 2: Qt.RightButton}   # JS MouseEvent.button -> Qt
+_BOARD_EVENT_TYPES = {"down": QMouseEvent.MouseButtonPress, "up": QMouseEvent.MouseButtonRelease,
+                      "move": QMouseEvent.MouseMove, "dbl": QMouseEvent.MouseButtonDblClick}
 
 
 def _board_buttons(mask):
@@ -1031,9 +1022,6 @@ class PluginWidget(QMainWindow):
         """Widget dieses Plugins auf dem Board (auch wenn gerade nicht zu sehen)."""
         return self._board_plugins.get(path)
 
-    def board_plugins(self):
-        return dict(self._board_plugins)
-
     def show_on_board(self, path, widget=None, title=""):
         """Plugin auf dem Board zeigen. widget: neu erzeugtes Plugin-Widget (ersetzt ein
         früheres desselben Plugins) oder None für das schon vorhandene."""
@@ -1159,14 +1147,12 @@ class PluginWidget(QMainWindow):
                                                        Qt.NoScrollPhase, False))
             return
         button = _BOARD_BUTTONS.get(int(event.get("button", 0)), Qt.LeftButton)
-        types = {"down": QMouseEvent.MouseButtonPress, "up": QMouseEvent.MouseButtonRelease,
-                 "move": QMouseEvent.MouseMove, "dbl": QMouseEvent.MouseButtonDblClick}
         if kind == "move":
             button = Qt.NoButton
         if kind == "down":
             self._board_grab = target
             target.setFocus(Qt.MouseFocusReason)   # danach tippt man direkt ins Plugin
-        QApplication.sendEvent(target, QMouseEvent(types[kind], position, position, global_pos,
+        QApplication.sendEvent(target, QMouseEvent(_BOARD_EVENT_TYPES[kind], position, position, global_pos,
                                                    button, buttons, mods))
         if kind == "up":
             self._board_grab = None

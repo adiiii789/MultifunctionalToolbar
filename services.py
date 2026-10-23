@@ -21,8 +21,6 @@
 #   - create_services:      Registry aller Dienste für den WebChannel.
 # =============================================================================
 
-import traceback
-
 from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QEvent, Qt
 from PyQt5.QtWidgets import QApplication
 

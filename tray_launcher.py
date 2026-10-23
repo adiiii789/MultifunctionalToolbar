@@ -46,6 +46,7 @@ import ast
 import contextlib
 import ctypes
 import faulthandler
+import functools
 import html
 import importlib.util
 import json
@@ -326,8 +327,9 @@ def _stub_titlebar(_widget, _dark, _caption_color, _text_color) -> None:
     """Ohne services.py bleibt die native Standard-Titelleiste."""
 
 
-def _stub_bring_to_front(window: QWidget) -> None:
-    """Ohne services.py: nur Qt-Mittel (Windows lässt dann evtl. nur die Taskleiste blinken)."""
+def raise_window(window: QWidget) -> None:
+    """Fenster zeigen und nach vorne holen, nur mit Qt-Mitteln (Windows lässt ein Programm im
+    Hintergrund dann evtl. nur die Taskleiste blinken - dafür services.bring_to_front)."""
     if window.isMinimized() or not window.isVisible():
         window.showNormal()
     window.raise_()
@@ -345,7 +347,7 @@ except Exception as _exc:  # noqa: BLE001  # pylint: disable=broad-exception-cau
 MediaControlBridge = getattr(_services, "MediaControlBridge", _StubMediaBridge)
 apply_native_titlebar = getattr(_services, "apply_native_titlebar", _stub_titlebar)
 install_push_handler = getattr(_services, "install_push_handler", None)   # services.push, siehe TrayApp
-bring_to_front = getattr(_services, "bring_to_front", _stub_bring_to_front)
+bring_to_front = getattr(_services, "bring_to_front", raise_window)
 
 # Werkzeuge der Plugins für den KI-Assistenten (ASSISTANT_TOOLS, siehe plugin_tools.py)
 # noinspection PyBroadException
@@ -477,6 +479,21 @@ class PluginMeta:
 
     @classmethod
     def from_file(cls, path: str) -> PluginMeta:
+        """Parameter der Plugin-Datei, je Dateiänderung einmal gelesen (der Explorer fragt bei
+        jedem Öffnen des Popups alle Plugins ab, auch große mit mehreren tausend Zeilen)."""
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = None
+        cached = _META_CACHE.get(path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+        meta = cls._read(path)
+        _META_CACHE[path] = (mtime, meta)
+        return meta
+
+    @classmethod
+    def _read(cls, path: str) -> PluginMeta:
         raw = {}
         lower = path.lower()
         try:
@@ -528,12 +545,21 @@ class PluginMeta:
         return self.name or os.path.basename(plugin_path)
 
 
+_META_CACHE: dict[str, tuple[float | None, PluginMeta]] = {}   # Pfad -> (mtime, PluginMeta)
+
+
+@functools.cache
+def _base_button_height() -> int:
+    """Höhe eines Standard-Buttons (einmal gemessen statt für jede Card ein Probe-Widget)."""
+    probe = QPushButton("Wg")
+    height = max(28, probe.sizeHint().height())
+    probe.deleteLater()
+    return height
+
+
 def card_metrics(meta: PluginMeta, compact: bool) -> tuple[int, int, int]:
     """Hoehe und Innenabstand (oben, unten) einer HTML-Card."""
-    probe = QPushButton("Wg")
-    base_height = max(28, probe.sizeHint().height())
-    probe.deleteLater()
-    height = meta.button_height or int(base_height * (2.4 if compact else 1.8))
+    height = meta.button_height or int(_base_button_height() * (2.4 if compact else 1.8))
     padding = max(4, height // 8)
     return height, padding, padding
 
@@ -2185,19 +2211,20 @@ class MainAppWindow(ExplorerMixin, QMainWindow):
         else:
             self._add_plugin_tab(widget, path, meta)
 
+    def _tab_for(self, path: str) -> QWidget | None:
+        """Container des offenen Tabs zu path, sonst None."""
+        tabs = (self.tab_widget.widget(i) for i in range(self.tab_widget.count()))
+        return next((tab for tab in tabs if tab.property("plugin_path") == path), None)
+
     def plugin_tab_widget(self, path: str) -> QWidget | None:
         """PluginWidget des offenen Tabs zu path, sonst None."""
-        for i in range(self.tab_widget.count()):
-            if self.tab_widget.widget(i).property("plugin_path") == path:
-                return getattr(self.tab_widget.widget(i), "plugin_widget", None)
-        return None
+        return getattr(self._tab_for(path), "plugin_widget", None)
 
     def _focus_existing_tab(self, path: str) -> bool:
-        for i in range(self.tab_widget.count()):
-            if self.tab_widget.widget(i).property("plugin_path") == path:
-                self._show_tab(self.tab_widget.widget(i))
-                return True
-        return False
+        tab = self._tab_for(path)
+        if tab is not None:
+            self._show_tab(tab)
+        return tab is not None
 
     def create_plugin_widget(self, path: str, mode: str, parent: QWidget | None) -> QWidget | None:
         lower = path.lower()
@@ -2278,11 +2305,7 @@ class TrayApp(QApplication):
         if reason == QSystemTrayIcon.Context:
             self.popup.show_popup()
         elif reason == QSystemTrayIcon.Trigger:
-            window = self.main_window
-            if window.isMinimized() or not window.isVisible():
-                window.showNormal()
-            window.activateWindow()
-            window.raise_()
+            raise_window(self.main_window)
 
     def handle_push(self, plugin: str, data) -> None:
         """services.push(plugin, data): Plugin öffnen und data an PluginWidget.on_push geben.
@@ -2407,10 +2430,7 @@ class TrayApp(QApplication):
         widget = window.plugin_tab_widget(path)
         if widget is None:
             raise RuntimeError(f"{os.path.basename(path)} ließ sich nicht als Fenster öffnen")
-        if window.isMinimized() or not window.isVisible():
-            window.showNormal()
-        window.raise_()
-        window.activateWindow()
+        raise_window(window)
         return widget
 
     def show_tool_widget(self, path: str, force: bool = True, allow_new: bool = True,
@@ -2435,10 +2455,7 @@ class TrayApp(QApplication):
             return
         window = self.main_window
         window.load_plugin_from_path(path, source_widget=window)
-        if window.isMinimized() or not window.isVisible():
-            window.showNormal()
-        window.raise_()
-        window.activateWindow()
+        raise_window(window)
 
     def _tray_anchor(self) -> QPoint:
         """Punkt, an dem das Popup bei push erscheint: am Tray-Icon, sonst unten rechts."""
