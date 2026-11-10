@@ -76,6 +76,35 @@ Plugins mit `ASSISTANT_TOOLS` (Timer, Kalender …, Konvention im Haupt-README u
 Toolbar ab (`TOOLBAR_TOOLS_URL`/`TOOLBAR_TOOLS_TOKEN`, vom Plugin geerbt) und frischt die Liste alle
 10 s auf. Von Hand gestartet (ohne Toolbar) gibt es diese Werkzeuge nicht.
 
+**Webseite an der richtigen Stelle:** Zeigt das Board eine Seite der Runde, scrollt es dorthin, wo die Antwort
+steht. Der Dienst sucht dazu den Absatz, der am besten zum Antworttext passt, und hängt das letzte Sprungziel
+davor an die Adresse (`seite#abschnitt`, `mcp_servers/web.py`: `page_anchor`) - anders geht es nicht, weil die
+Seite im Board ohne Skripte in einem fremden Ursprung läuft. Grenzen: Die Seite braucht Sprungziele (`id`) in
+der Nähe, und der Text muss wörtlich passen (bei einer deutschen Antwort zu einer englischen Seite oft nur
+über Namen und Zahlen). Ohne Treffer bleibt die Seite oben. Aus: `PAGE_SCROLL_TO_ANSWER` in `backend/presenter.py`.
+
+## Die KI zeigt selbst etwas auf dem Board: `show_on_board`
+
+Mit dem Werkzeug `show_on_board` (`backend/integrations/board.py`) bringt das Modell von sich aus Inhalte
+aufs Board - Tabellen, Listen, Anleitungen, Code. Zwei Formen:
+
+- `title` + `html`: eigenes HTML. Ein Bruchstück (`<ul>…</ul>`) bekommt den Rahmen der Vorlage
+  `templates/board_html.html.j2` (Überschrift, Farben und Schrift wie die anderen Ansichten); ein ganzes
+  Dokument wird übernommen, wie es ist.
+- `title` + `text` und/oder `columns` + `rows`: die Standardvorlage mit Tabelle (`default.html.j2`).
+
+Die Ansicht hängt an der Antwort (`view`, mit `"requested": true`) und hat im Viewer Vorrang vor Webseiten
+der Runde und vor der Liste der Werkzeugaufrufe. Sie folgt dem Panel-Schalter „Ergebnisse aufs Board“.
+**Eingaben vom Board:** Knöpfe, Links, Eingabefelder, Auswahllisten und Häkchen im HTML funktionieren, obwohl
+keine Skripte laufen - der Viewer hört von außen mit (`viewer/js/assistant.js`: `hookBoardInput`) und schickt
+es als deine Chat-Nachricht an die KI: „Auf dem Board angetippt: „Ja“. Eingaben: Name: „…““, Enter in einem
+Feld „Auf dem Board eingegeben: …“, Häkchen/Auswahl ohne Knopf „Auf dem Board gewählt: …“. Die Nachricht steht
+sichtbar im Chat. Abschalten: Panel → „Board-Eingaben an die KI“. Passwortfelder werden nie übertragen.
+
+Sicherheit: Das HTML läuft im Board in einer Sandbox ohne Skripte und bekommt eine Content-Security-Policy,
+die jedes Nachladen aus dem Netz sperrt (auch Bilder) - sonst könnte Inhalt aus einer Webseite oder Mail,
+den das Modell übernimmt, Daten über eine Bild-Adresse nach außen tragen. Bilder gehen nur als `data:`-URL.
+
 ## Ansichten aufs Board (Jinja)
 
 Wie im PDA rendert der Dienst Ansichten (`TemplateView`) mit Jinja2: `backend/rendering.py`, Vorlagen in

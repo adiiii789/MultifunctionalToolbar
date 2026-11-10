@@ -214,6 +214,9 @@ function applyRenderStyle() {
 function applyLighting() {
   if (!window.__lights) return;
   const l = renderStyle.anime ? LIGHTING.anime : LIGHTING.standard;
-  window.__lights.ambient.intensity = l.ambient * renderStyle.brightness;
-  window.__lights.dir.intensity = l.dir * renderStyle.brightness;
+  // Stimmung im Raum (room.js: Tag/Abend/Nacht, Lampe) färbt und dimmt das Licht auf der Figur
+  const r = window.roomLight || { color: 0xffffff, level: 1 };
+  for (const light of [window.__lights.ambient, window.__lights.dir]) light.color.set(r.color).convertSRGBToLinear();
+  window.__lights.ambient.intensity = l.ambient * renderStyle.brightness * r.level;
+  window.__lights.dir.intensity = l.dir * renderStyle.brightness * r.level;
 }

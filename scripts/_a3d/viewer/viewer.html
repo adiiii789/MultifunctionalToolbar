@@ -6,11 +6,19 @@
   <link rel="stylesheet" href="css/viewer.css" />
 </head>
 <body>
-<!-- Bühne: Hintergrundbild + Smartboard-Fläche (liegt HINTER der 3D-Figur) -->
-<img id="stage-narrow-bg" alt="">   <!-- Hintergrund für das schmale Layout -->
+<!-- Bühne: Raum + Smartboard (liegt HINTER der 3D-Figur) -->
+<img id="stage-narrow-bg" alt="">   <!-- eigenes Bild für das schmale Layout (STAGE.narrow.background) -->
 <div id="stage">
-  <img id="stage-bg" alt="">
-  <div id="board"><iframe id="board-frame" title="Board"></iframe></div>
+  <img id="stage-bg" alt="">        <!-- eigenes Hintergrundbild (STAGE.background) statt des Raums -->
+  <div id="room"></div>             <!-- gezeichneter Raum (room.js) -->
+  <canvas id="chalk"></canvas>      <!-- Tafel hinter dem Board: mit der Maus malen -->
+  <div id="room-shade"></div>       <!-- Abend/Nacht: Raum abdunkeln (das Board leuchtet selbst) -->
+  <div id="board-unit">             <!-- rollbares Board: Rahmen, Bildfläche, Ständer -->
+    <div class="deco board-stand"><i class="leg l"><b class="wheel"></b><b class="wheel"></b></i><i class="leg r"><b class="wheel"></b><b class="wheel"></b></i></div>
+    <div class="deco board-case"></div>
+    <div id="board"><iframe id="board-frame" title="Board"></iframe></div>
+    <div class="deco" id="board-grip" title="Board zur Seite schieben (klicken oder ziehen)"></div>
+  </div>
 </div>
 
 <div id="hint">Lade 3D-Modell…</div>
@@ -55,7 +63,9 @@
 <script src="js/actions.js"></script>      <!-- [Aktionen] im Chat ausführen -->
 <script src="js/assistant.js"></script>    <!-- KI-Assistent (Ollama/MCP), Spracheingabe -->
 <script src="js/panel.js"></script>        <!-- Bedienpanel -->
-<script src="js/stage.js"></script>        <!-- Hintergrund, Board, Kamera-Ausschnitt, Mausblick -->
+<script src="js/stage.js"></script>        <!-- Bühne, Board, Kamera-Ausschnitt, Mausblick -->
+<script src="js/room.js"></script>         <!-- Raum: Fenster, Uhr, Licht, Tafel, rollbares Board -->
+<script src="js/room3d.js"></script>       <!-- 3D-Raum aus models/room.glb (falls vorhanden): Himmel, Wasser -->
 <script src="js/main.js"></script>         <!-- Setup, Laden, Render-Schleife (startet alles) -->
 </body>
 </html>

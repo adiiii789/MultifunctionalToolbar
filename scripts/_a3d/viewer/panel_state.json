@@ -7,5 +7,7 @@
   "\ud83c\udfac Animationen": true,
   "\ud83d\udc40 Blick": true,
   "\ud83c\udfa8 Darstellung": true,
-  "\ud83e\udd38 Gesten": true
+  "\ud83e\udd38 Gesten": false,
+  "\ud83e\uddca 3D-Raum": false,
+  "\ud83c\udfeb Raum": false
 }

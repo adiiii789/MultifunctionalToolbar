@@ -18,7 +18,8 @@ const PHYSICS = {
   enabled: true,
   step: 1 / 60,          // feste Schrittweite für stabile Simulation
   maxSteps: 4,
-  gravityDir: new THREE.Vector3(0, -1, 0)
+  gravityDir: new THREE.Vector3(0, -1, 0),
+  wind: new THREE.Vector3()   // Luftzug (Weltrichtung * Stärke) - setzt room.js bei offenem Fenster
 };
 
 // Kollisionskörper: Kugel = {bone, at, r}, Kapsel = {bone, from, to, r}
@@ -177,7 +178,8 @@ function stepSpring(j, dt) {
   _inertia.subVectors(j.current, j.prev).multiplyScalar(1 - j.drag);
   _next.copy(j.current).add(_inertia)
        .addScaledVector(_restDir, j.stiffness * dt)
-       .addScaledVector(PHYSICS.gravityDir, j.gravity * dt);
+       .addScaledVector(PHYSICS.gravityDir, j.gravity * dt)
+       .addScaledVector(PHYSICS.wind, (0.3 + j.gravity) * dt);   // leichte Teile (Haare) fängt der Wind stärker
   // Länge erhalten
   _next.sub(_wp).normalize().multiplyScalar(j.length).add(_wp);
   // Kollision

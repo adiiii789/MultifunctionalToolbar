@@ -147,6 +147,122 @@ def embeddable(url: str) -> tuple[str, str] | None:
     return final, title[:200]
 
 
+# --- Stelle auf der Seite, an der die Antwort steht (Board scrollt dorthin) --------------
+# Die Seite läuft im Board ohne Skripte in einem fremden Ursprung - von außen lässt sie sich nicht
+# scrollen. Was immer geht, ist ein Sprungziel in der Adresse (seite.html#abschnitt): Der Browser
+# scrollt dann selbst zu dem Element mit dieser id. Also: den Absatz suchen, der am besten zur
+# Antwort passt, und das letzte Sprungziel davor nehmen.
+ANCHOR_MIN_WORDS = 3            # so viele verschiedene Wörter der Antwort müssen in der Stelle vorkommen
+ANCHOR_WINDOW = 3               # Absätze, die zusammen bewertet werden (Listen, Tabellenzeilen)
+ANCHOR_SKIP_TOP_CHARS = 500     # steht die Stelle ohnehin ganz oben, bleibt die Seite oben
+_WORD = re.compile(r"[^\W_]{4,}|\d{2,}")
+_STOPWORDS = frozenset(
+    "aber alle auch dass dann denn dies diese dieser doch eine einem einen einer eines haben hatte hier "
+    "kann mehr nach nicht noch oder sehr sich sind über unter wenn werden wird wurde zwischen auf dem board "
+    "about also been from have into more most only other some such than that their them then there these "
+    "they this were what when which will with would your".split())
+
+
+class _AnchorFinder(HTMLParser):
+    """Textblöcke der Seite, jeder mit dem letzten Sprungziel (id bzw. <a name>) davor."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.blocks: list[tuple[str | None, str]] = []
+        self._anchor: str | None = None
+        self._buffer: list[str] = []
+        self._skip = 0
+        self._in_title = False
+
+    def _flush(self):
+        text = " ".join("".join(self._buffer).split())
+        self._buffer = []
+        if text:
+            self.blocks.append((self._anchor, text))
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _SKIP:
+            self._skip += 1
+            return
+        if tag == "title":
+            self._in_title = True
+        if self._skip:
+            return
+        attributes = dict(attrs)
+        target = attributes.get("id") or (attributes.get("name") if tag == "a" else None)
+        if target or tag in _BLOCK:
+            self._flush()
+        if target:
+            self._anchor = target
+
+    def handle_endtag(self, tag):
+        if tag in _SKIP and self._skip:
+            self._skip -= 1
+        elif tag == "title":
+            self._in_title = False
+        elif tag in _BLOCK:
+            self._flush()
+
+    def handle_data(self, data):
+        if not self._skip and not self._in_title:
+            self._buffer.append(data)
+
+
+def _words(text: str) -> set[str]:
+    return {word for word in _WORD.findall(text.lower()) if word not in _STOPWORDS}
+
+
+def find_anchor(html: str, answer: str) -> str | None:
+    """Sprungziel (id) vor der Stelle der Seite, die am besten zur Antwort passt - oder None, wenn
+    nichts deutlich passt, die Stelle ohnehin oben steht oder die Seite dort keine Sprungziele hat."""
+    wanted = _words(answer)
+    if len(wanted) < ANCHOR_MIN_WORDS:
+        return None
+    finder = _AnchorFinder()
+    finder.feed(html)
+    finder.close()
+    finder._flush()
+    blocks = finder.blocks
+    if not blocks:
+        return None
+    found = [_words(text) & wanted for _, text in blocks]
+    # Seltene Wörter zählen mehr: Ein Name oder eine Zahl sagt mehr als ein Wort, das überall steht
+    spread = {word: sum(word in block for block in found) for word in wanted}
+    weight = {word: 1.0 / count for word, count in spread.items() if count}
+    best, best_score, best_words = -1, 0.0, 0
+    for i in range(len(blocks)):
+        words = set().union(*found[i:i + ANCHOR_WINDOW])
+        score = sum(weight[word] for word in words)
+        if score > best_score:
+            best, best_score, best_words = i, score, len(words)
+    if best < 0 or best_words < ANCHOR_MIN_WORDS:
+        return None
+    # Im besten Fenster den Absatz nehmen, der selbst am meisten trifft - sonst landet man einen
+    # Abschnitt zu früh (das Fenster beginnt oft schon vor der eigentlichen Stelle)
+    best = max(range(best, min(best + ANCHOR_WINDOW, len(blocks))),
+               key=lambda i: (sum(weight[word] for word in found[i]), -i))
+    if sum(len(text) for _, text in blocks[:best]) < ANCHOR_SKIP_TOP_CHARS:
+        return None
+    return blocks[best][0]
+
+
+def page_anchor(url: str, answer: str) -> str | None:
+    """Adresse mit Sprungziel (url#id) zu der Stelle, an der die Antwort steht - None ohne Treffer."""
+    try:
+        request = urllib.request.Request(check_public_url(url.strip()), headers={
+            "User-Agent": USER_AGENT, "Accept-Language": "de,en;q=0.8", "Accept-Encoding": "gzip, deflate"})
+        with _OPENER.open(request, timeout=TIMEOUT_S) as response:
+            headers = response.headers
+            raw = _decompress(response.read(MAX_PAGE_BYTES + 1), (headers.get("Content-Encoding") or "").lower())
+            charset = headers.get_content_charset() or "utf-8"
+    except (WebError, urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return None
+    anchor = find_anchor(raw[:MAX_PAGE_BYTES].decode(charset, errors="replace"), answer)
+    if not anchor:
+        return None
+    return urllib.parse.urldefrag(url)[0] + "#" + urllib.parse.quote(anchor, safe="")
+
+
 # --- HTML -> Text --------------------------------------------------------------------
 _SKIP = {"script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form", "button", "iframe"}
 _BLOCK = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article", "table", "ul", "ol"}

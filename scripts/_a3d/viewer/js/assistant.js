@@ -26,6 +26,7 @@ const ASSISTANT = {
   toolCallsOnBoard: false,  // Bestätigung der Werkzeugaufrufe (Vorlage tool_calls) aufs Board - sonst nur Konsole
   webOnBoard: true,         // Webseite, die Miku gelesen/gefunden hat, aufs Board (board/web.html)
   webScripts: false,        // ... mit JavaScript - Chromium 83 hat bekannte Lücken, deshalb aus
+  boardInput: true,         // Antippen/Eingeben auf dem Board geht als Nachricht an die KI (hookBoardInput)
   think: false,             // Denkmodus (💭 am Chat): erst nachdenken, dann antworten - langsamer
   thinkingFace: "thinking", // Mimik, solange die KI rechnet (Schlüssel aus EXPRESSIONS)
   statusPoll: 2000          // ms zwischen Statusabfragen, solange der Dienst startet
@@ -53,13 +54,14 @@ function applyAssistantSettings(v) {
   if (typeof v.toolCallsOnBoard === "boolean") ASSISTANT.toolCallsOnBoard = v.toolCallsOnBoard;
   if (typeof v.webOnBoard === "boolean") ASSISTANT.webOnBoard = v.webOnBoard;
   if (typeof v.webScripts === "boolean") ASSISTANT.webScripts = v.webScripts;
+  if (typeof v.boardInput === "boolean") ASSISTANT.boardInput = v.boardInput;
   if (typeof v.think === "boolean") ASSISTANT.think = v.think;
   updateAssistantUi();
 }
 function saveAssistantSettings() {
   const v = { enabled: ASSISTANT.enabled, viewOnBoard: ASSISTANT.viewOnBoard,
               toolCallsOnBoard: ASSISTANT.toolCallsOnBoard, webOnBoard: ASSISTANT.webOnBoard,
-              webScripts: ASSISTANT.webScripts, think: ASSISTANT.think };
+              webScripts: ASSISTANT.webScripts, boardInput: ASSISTANT.boardInput, think: ASSISTANT.think };
   try { localStorage.setItem(ASSISTANT_SETTINGS_KEY, JSON.stringify(v)); } catch (e) { /* egal */ }
   if (!assistantViaPlugin) return;
   fetch(ASSISTANT_SETTINGS_FILE, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -149,8 +151,10 @@ function askAssistant(message) {
 /** Was die Figur gerade kann - Namen so, wie actions.js sie versteht, auf Deutsch und Englisch
     (der KI-Dienst nimmt die Liste in seiner Sprache, config.LANGUAGE). */
 function avatarAbilities() {
-  const gestures = Object.keys(GESTURES).map(normName).filter(Boolean);
-  const gesturesEn = Object.keys(GESTURE_ALIASES).filter(en => findBest(GESTURE_ALIASES[en], Object.keys(GESTURES)));
+  // Ohne Gesten, die nur zu einem Ablauf gehören (Board schieben: internal in gestures.js)
+  const offered = Object.keys(GESTURES).filter(n => !GESTURES[n].internal);
+  const gestures = offered.map(normName).filter(Boolean);
+  const gesturesEn = Object.keys(GESTURE_ALIASES).filter(en => findBest(GESTURE_ALIASES[en], offered));
   const expressions = [], seen = new Set();
   for (const [alias, key] of Object.entries(EXPRESSION_ALIASES)) {   // ein deutscher Name je Ausdruck
     if (EXPRESSIONS[key] && !seen.has(key)) { seen.add(key); expressions.push(alias); }
@@ -182,7 +186,9 @@ async function requestAssistantReply(text) {
   // Kam in dieser Runde ein Plugin aufs Board, bleibt es - Seite/Ansicht kommen danach (nach ✕)
   const keepPlugin = boardPlugin.turn && boardPlugin.active;
   if (reply.view) logToolCalls(reply.view);
-  if (reply.page && ASSISTANT.webOnBoard && !stageState.narrow) {
+  // Hat die KI selbst etwas aufs Board gebracht (show_on_board), geht das vor einer Webseite der Runde
+  const requested = reply.view && reply.view.requested && ASSISTANT.viewOnBoard;
+  if (reply.page && ASSISTANT.webOnBoard && !stageState.narrow && !requested) {
     showWebPageOnBoard(reply.page.url, reply.page.title, ASSISTANT.webScripts, keepPlugin);
   } else if (reply.view) {
     showViewOnBoard(reply.view, keepPlugin);
@@ -280,6 +286,89 @@ function showViewOnBoard(view, keepPlugin) {
   showOnBoard(html, keepPlugin);
 }
 
+/* ---- Eingaben auf dem Board -> KI -------------------------------------------------------
+   HTML auf dem Board (showOnBoard, z. B. von show_on_board der KI) läuft ohne Skripte. Damit die
+   KI trotzdem mitbekommt, was man dort antippt oder eintippt, hängt sich der Viewer von außen an
+   das Dokument im Board (stage.js setzt dafür sandbox="allow-same-origin") und schickt es als
+   normale Chat-Nachricht von dir ("Auf dem Board angetippt: ..."), sichtbar im Chat.
+     Antippen:  Knöpfe, Links, Elemente mit data-action  -> Beschriftung (bzw. data-action)
+     Eingeben:  Felder im selben Formular (ohne Formular: alle auf der Seite) gehen mit, sobald
+                ein Knopf gedrückt oder in einem Feld Enter gedrückt wird
+     Auswählen: Häkchen/Auswahl ohne Knopf daneben melden sich sofort
+   Links werden dabei nicht geöffnet (das Board bleibt, wie es ist). Webseiten und Plugins auf dem
+   Board sind nicht betroffen. Schalter im Panel: "Board-Eingaben an die KI". */
+const BOARD_INPUT = { maxValue: 500, maxLabel: 80, minGapMs: 600 };
+let boardInputSentAt = 0;
+
+function hookBoardInput() {
+  if (!boardFrame.hasAttribute("srcdoc")) return;
+  let doc;
+  try { doc = boardFrame.contentDocument; } catch (e) { return; }     // fremde Herkunft - nichts zu tun
+  if (!doc || !doc.body || doc.__a3dHooked) return;
+  doc.__a3dHooked = true;
+  const short = (s, n) => { s = String(s || "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) + "…" : s; };
+  const TAP = "button, a, input[type=button], input[type=submit], [data-action]";
+  const FIELDS = "input, textarea, select";
+  const isButtonInput = el => /^(button|submit|reset|image|hidden)$/i.test(el.type || "");
+  const labelOf = el => short(el.getAttribute("data-action") || (el.tagName === "INPUT" ? el.value : el.textContent) ||
+                              el.getAttribute("aria-label") || el.title || el.getAttribute("href"), BOARD_INPUT.maxLabel);
+  /** Name eines Felds: name, zugehöriges <label>, Platzhalter - sonst "Feld 1" ... */
+  const fieldName = (el, i) => {
+    const byFor = el.id ? doc.querySelector('label[for="' + el.id.replace(/"/g, "") + '"]') : null;
+    const wrap = el.closest("label");
+    return short(el.name || (byFor && byFor.textContent) || (wrap && wrap.textContent) || el.placeholder ||
+                 el.getAttribute("aria-label") || "Feld " + (i + 1), BOARD_INPUT.maxLabel);
+  };
+  /** Ausgefüllte Felder im Formular des Elements (ohne Formular: der ganzen Seite) als "Name: „Wert“". */
+  const fieldsOf = el => {
+    const scope = el.closest("form") || doc;
+    const out = [];
+    [...scope.querySelectorAll(FIELDS)].forEach((f, i) => {
+      if (isButtonInput(f) || f.type === "password") return;
+      if (f.type === "checkbox" || f.type === "radio") { if (f.checked) out.push(fieldName(f, i) + ": ✓" + (f.value && f.value !== "on" ? " " + short(f.value, 60) : "")); return; }
+      const value = f.tagName === "SELECT" ? [...f.selectedOptions].map(o => o.textContent.trim()).join(", ") : f.value;
+      if (String(value || "").trim()) out.push(fieldName(f, i) + ": „" + short(value, BOARD_INPUT.maxValue) + "“");
+    });
+    return out;
+  };
+  const send = (text, el) => {
+    if (!ASSISTANT.boardInput || !assistantAvailable()) return;
+    const now = Date.now();
+    if (now - boardInputSentAt < BOARD_INPUT.minGapMs) return;          // Doppelklick = eine Nachricht
+    boardInputSentAt = now;
+    if (el && el.style) {                                              // kurz aufleuchten: "ist angekommen"
+      const old = el.style.outline;
+      el.style.outline = "3px solid #3fb9d6";
+      setTimeout(() => { el.style.outline = old; }, 450);
+    }
+    sendChatMessage(text);
+  };
+  doc.addEventListener("click", e => {
+    const el = e.target.closest ? e.target.closest(TAP) : null;
+    if (!el) return;
+    e.preventDefault();                                                // Links nicht öffnen, nichts abschicken
+    const fields = fieldsOf(el);
+    send("Auf dem Board angetippt: „" + (labelOf(el) || "Knopf") + "“" +
+         (fields.length ? ". Eingaben: " + fields.join(", ") : ""), el);
+  }, true);
+  doc.addEventListener("keydown", e => {
+    const el = e.target;
+    if (e.key !== "Enter" || !el.matches || !el.matches("input") || isButtonInput(el)) return;
+    e.preventDefault();
+    const fields = fieldsOf(el);
+    if (fields.length) send("Auf dem Board eingegeben: " + fields.join(", "), el);
+  }, true);
+  doc.addEventListener("change", e => {
+    const el = e.target;
+    if (!el.matches || !el.matches("select, input[type=checkbox], input[type=radio]")) return;
+    if ((el.closest("form") || doc).querySelector(TAP)) return;        // es gibt einen Knopf - der schickt alles zusammen
+    const i = [...doc.querySelectorAll(FIELDS)].indexOf(el);
+    const value = el.tagName === "SELECT" ? [...el.selectedOptions].map(o => o.textContent.trim()).join(", ")
+                : (el.checked ? "✓" : "nicht mehr ✓") + (el.value && el.value !== "on" ? " " + short(el.value, 60) : "");
+    send("Auf dem Board gewählt: " + fieldName(el, i) + ": " + value, el);
+  }, true);
+}
+
 /* ---- Spracheingabe (🎤) ---- */
 async function toggleRecording() {
   if (assistant.transcribing) return;
@@ -344,6 +433,9 @@ function buildAssistantSection(panel) {
   }));
   add(makeToggle("Werkzeugaufrufe aufs Board", () => ASSISTANT.toolCallsOnBoard, v => {
     ASSISTANT.toolCallsOnBoard = v; saveAssistantSettings();
+  }));
+  add(makeToggle("Board-Eingaben an die KI", () => ASSISTANT.boardInput, v => {
+    ASSISTANT.boardInput = v; saveAssistantSettings();
   }));
   add(makeToggle("Webseiten aufs Board", () => ASSISTANT.webOnBoard, v => {
     ASSISTANT.webOnBoard = v; saveAssistantSettings();

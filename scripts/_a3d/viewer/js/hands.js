@@ -155,7 +155,7 @@ function orientPalm(side, targetDir, weight = 1) {
    weight = Stärke der lockeren Pose (0 während eines Clips: Finger bleiben,
    wie die Animation sie stellt - eine Gesten-Handpose gilt trotzdem). */
 const handTargets = { L: null, R: null };     // {pose, weight} - von Gesten gesetzt, jeden Frame neu
-function updateHands(weight = 1) {
+function updateHands(weight = 1, time = 0) {
   if (!hands.ready) { if (modelRoot) setupHands(); else return; }
   for (const side of ["L", "R"]) {
     const g = handTargets[side];
@@ -163,7 +163,10 @@ function updateHands(weight = 1) {
     const gw = g ? clamp(g.weight, 0, 1.2) : 0;
     const w = Math.max(weight, Math.min(gw, 1));
     if (w <= 0.001) continue;
-    const base = HAND_POSES[hands.idlePose];
+    // Lockere Hand lebt: Finger krümmen und strecken sich ganz leicht, jeder etwas anders
+    const base = Object.assign({}, HAND_POSES[hands.idlePose]);
+    const seed = side === "L" ? 3.1 : 8.7;
+    FINGERS.forEach((f, i) => { base[f] = Math.max(0, base[f] + 0.07 * smoothNoise(time * 0.6, seed + i * 1.9)); });
     applyHandPose(side, g ? mixPose(base, resolvePose(g.pose), gw) : base, w);
   }
 }

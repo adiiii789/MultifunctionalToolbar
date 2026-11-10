@@ -16,6 +16,8 @@
      [stimmung.lächeln]  [stimmung.neutral]          Grundstimmung, bleibt
      [clip.Tanz_Drehen]                              Blender-Animation
      [board.zeige(board/folie2.html)]  [board.leeren]
+     [board.weg]  [board.her]                        Miku schiebt das Board zur Seite / holt es zurück
+     [raum.fenster auf]  [raum.licht aus]  [raum.nacht]   Fenster, Licht, Tageszeit (room.js)
      [pause.1.5]                                     warten (Sekunden)
      [bewegung.idle]  [bewegung.laufen]  [bewegung.stopp]
    Groß/Klein ist egal; Leerzeichen und "_" sind gleichwertig ("Board_Mitte").
@@ -41,6 +43,7 @@ const ACTION_CATEGORIES = {
   stimmung: "mood", mood: "mood",
   clip: "clip", animation: "clip",
   board: "board",
+  raum: "room", room: "room",
   pause: "pause", wait: "pause",
   bewegung: "motion", motion: "motion"
 };
@@ -59,13 +62,25 @@ const GESTURE_ALIASES = {
   "nod": "Nicken", "shake head": "Kopfschütteln", "bow": "Verbeugen", "wave": "Winken",
   "tilt head": "Kopf neigen", "point right": "Nach rechts zeigen", "present": "Präsentieren",
   "explain": "Argumentieren", "important point": "Wichtiger Punkt", "shrug": "Achselzucken",
-  "think": "Nachdenken", "clap": "Klatschen"
+  "think": "Nachdenken", "clap": "Klatschen", "push": "Schieben", "pull": "Heranziehen"
 };
 
 const MOTION_FUNCTIONS = {
   idle: () => playAnimation(IDLE_NAME),
   laufen: () => playAnimation(WALK_PLACE_NAME),
   stopp: () => stopAnimation(), stop: () => stopAnimation()
+};
+
+// [raum.x]: Fenster, Licht und Tageszeit des Raums (room.js)
+const ROOM_FUNCTIONS = {
+  "fenster auf": () => setWindowOpen(true), "fenster zu": () => setWindowOpen(false),
+  "window open": () => setWindowOpen(true), "window close": () => setWindowOpen(false),
+  "licht an": () => setLamp(true), "licht aus": () => setLamp(false),
+  "light on": () => setLamp(true), "light off": () => setLamp(false),
+  "tag": () => setDaytime("day"), "abend": () => setDaytime("evening"), "nacht": () => setDaytime("night"),
+  "day": () => setDaytime("day"), "evening": () => setDaytime("evening"), "night": () => setDaytime("night"),
+  "auto": () => setDaytime("auto"), "uhrzeit": () => setDaytime("auto"),
+  "tafel wischen": () => wipeChalkboard(), "wipe": () => wipeChalkboard()
 };
 
 /** Für Vergleiche: klein, ohne Emojis/Satzzeichen, "_" = Leerzeichen, Umlaute bleiben. */
@@ -162,6 +177,14 @@ function executeAction(a) {
     case "board": {
       if (/^(leeren|clear)$/.test(nf)) { clearBoard(); return null; }
       if (/^(zeige|zeigen|show)$/.test(nf) && a.arg) { showOnBoard(a.arg); return null; }
+      // Miku schiebt es selbst (läuft nebenher weiter, während sie spricht)
+      if (/^(weg|beiseite|zur seite|aside|away)$/.test(nf)) { pushBoard(true); return null; }
+      if (/^(her|zurück|zurueck|holen|back)$/.test(nf)) { pushBoard(false); return null; }
+      break;
+    }
+    case "room": {
+      const fn = ROOM_FUNCTIONS[nf];
+      if (fn) { fn(); return null; }
       break;
     }
     case "pause": {

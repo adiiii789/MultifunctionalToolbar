@@ -58,7 +58,7 @@ function findStation(name) { return stationList().find(s => s.name === name) || 
 function stationScreenX(st) {
   if (st.home) return null;
   if (st.board != null) {
-    const r = boardEl.getBoundingClientRect();
+    const r = boardHomeRect();              // Platz des Boards, auch wenn es zur Seite gerollt ist
     return (r.left + st.board * r.width) / window.innerWidth + (st.offset || 0);
   }
   return st.sx;

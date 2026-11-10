@@ -131,26 +131,32 @@ function aimAt(bone, child, point, weight = 1) {
   if (!bone) return;
   aimWorld(bone, child, point.clone().sub(bone.getWorldPosition(new THREE.Vector3())), weight);
 }
-/** Zwei-Knochen-IK: Hand (Handgelenk) zu einem Weltpunkt führen.
-    Der Ellbogen knickt Richtung pole (Körperrichtung, Standard: nach unten-hinten-außen).
-    Reicht der Arm nicht, wird er ganz gestreckt in Richtung Ziel gehalten. */
-function reachTo(side, point, weight = 1, pole = null) {
-  const arm = rig["arm" + side], elbow = rig["elbow" + side], wrist = rig["wrist" + side];
-  if (!arm || !elbow || !wrist || weight <= 0) return;
-  const S = arm.getWorldPosition(new THREE.Vector3());
-  const E = elbow.getWorldPosition(new THREE.Vector3());
-  const W = wrist.getWorldPosition(new THREE.Vector3());
+/** Zwei-Knochen-IK: Ende einer Kette (Handgelenk, Knöchel) zu einem Weltpunkt führen.
+    Das mittlere Gelenk knickt Richtung pole (Weltrichtung). Reicht die Kette nicht,
+    wird sie ganz gestreckt in Richtung Ziel gehalten. */
+function solveLimb(upper, mid, end, point, pole, weight = 1) {
+  if (!upper || !mid || !end || weight <= 0) return;
+  const S = upper.getWorldPosition(new THREE.Vector3());
+  const E = mid.getWorldPosition(new THREE.Vector3());
+  const W = end.getWorldPosition(new THREE.Vector3());
   const a = S.distanceTo(E), b = E.distanceTo(W);
   const toT = point.clone().sub(S);
   const d = clamp(toT.length(), Math.abs(a - b) + 1e-3, a + b - 1e-3);
   const dirT = toT.normalize();
-  const sx = side === "L" ? 1 : -1;
-  const p = toWorldDir(pole || dir(0.45 * sx, -0.55, -0.7), new THREE.Vector3());
+  const p = pole.clone();
   p.addScaledVector(dirT, -p.dot(dirT)).normalize();              // Knickrichtung senkrecht zur Ziellinie
   const cosA = clamp((a * a + d * d - b * b) / (2 * a * d), -1, 1);
-  const elbowTarget = S.clone().addScaledVector(dirT, a * cosA).addScaledVector(p, a * Math.sqrt(1 - cosA * cosA));
-  aimWorld(arm, elbow, elbowTarget.sub(S), weight);
-  aimAt(elbow, wrist, point, weight);
+  const midTarget = S.clone().addScaledVector(dirT, a * cosA).addScaledVector(p, a * Math.sqrt(1 - cosA * cosA));
+  aimWorld(upper, mid, midTarget.sub(S), weight);
+  aimAt(mid, end, point, weight);
+}
+/** Hand zu einem Weltpunkt führen. Der Ellbogen knickt Richtung pole
+    (Körperrichtung, Standard: nach unten-hinten-außen). */
+function reachTo(side, point, weight = 1, pole = null) {
+  const sx = side === "L" ? 1 : -1;
+  followTight[side] = Math.max(followTight[side], clamp(weight, 0, 1));   // Hand soll den Punkt wirklich treffen
+  solveLimb(rig["arm" + side], rig["elbow" + side], rig["wrist" + side], point,
+            toWorldDir(pole || dir(0.45 * sx, -0.55, -0.7), new THREE.Vector3()), weight);
 }
 
 /** Kopf drehen - Oberkörper, Hals und Kopf teilen sich die Bewegung.
@@ -192,29 +198,106 @@ function smoothNoise(t, seed) {
 const damp = (current, target, rate, dt) => current + (target - current) * (1 - Math.exp(-rate * dt));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-/** Pro Frame: Ruhepose -> Clip (Mixer) -> Idle (inkl. Blick) -> Laufzyklus -> Geste -> Finger -> Physik */
+/* =========================================================================
+   Nachschwingen (Trägheit) für Oberkörper, Kopf und Arme
+   -------------------------------------------------------------------------
+   Idle, Gehen und Gesten rechnen jedes Bild eine exakte Zielhaltung. Würde der
+   Körper sie sofort einnehmen, sähe jede Bewegung aus wie von einem Motor
+   gefahren: startet und stoppt auf den Punkt, alle Gelenke gleichzeitig.
+   Deshalb folgt jeder dieser Knochen seinem Ziel über eine leicht
+   unterdämpfte Feder - er hat Masse: läuft etwas nach, schwingt minimal
+   über und pendelt aus. Weiter außen (Unterarm, Hand) weicher als am Rumpf,
+   dadurch laufen die Gelenke von selbst nacheinander ein.
+   speed = wie schnell der Knochen folgt (1/s; kleiner = träger, schwerer),
+   damping = 1: kein Überschwingen, kleiner = pendelt mehr nach.
+   Beine sind ausgenommen (die Füße sollen exakt stehen), Finger auch.
+   ========================================================================= */
+const FOLLOW = {
+  enabled: true,
+  amount: 1,            // 0 = aus (alte, direkte Bewegung) .. 1 = volle Trägheit
+  bones: {
+    upper:     { speed: 15, damping: 0.85 }, upper2:    { speed: 15, damping: 0.85 },
+    neck:      { speed: 15, damping: 0.85 }, head:      { speed: 14, damping: 0.80 },
+    shoulderL: { speed: 16, damping: 0.80 }, shoulderR: { speed: 16, damping: 0.80 },
+    armL:      { speed: 14, damping: 0.74 }, armR:      { speed: 14, damping: 0.74 },
+    elbowL:    { speed: 13, damping: 0.68 }, elbowR:    { speed: 13, damping: 0.68 },
+    twistL:    { speed: 13, damping: 0.72 }, twistR:    { speed: 13, damping: 0.72 },
+    wristL:    { speed: 11, damping: 0.62 }, wristR:    { speed: 11, damping: 0.62 }
+  },
+  tightSpeed: 34        // Arme, die per IK einen Punkt treffen müssen (Klatschen, Hand ans Kinn): fast direkt
+};
+const followState = {};                 // Rolle -> { q, w }
+const followTight = { L: 0, R: 0 };     // von reachTo/solveLimb gesetzt, gilt für dieses Bild
+const _fe = new THREE.Quaternion(), _fd = new THREE.Vector3(), _fstep = new THREE.Quaternion();
+
+/** Nach allen Posen: Knochen ihrem Ziel mit Trägheit folgen lassen. w = Anteil (0 bei Clips). */
+function applyFollow(dt, w) {
+  w *= FOLLOW.enabled ? FOLLOW.amount : 0;
+  for (const [role, cfg] of Object.entries(FOLLOW.bones)) {
+    const bone = rig[role];
+    if (!bone) continue;
+    let st = followState[role];
+    if (!st) st = followState[role] = { q: bone.quaternion.clone(), w: new THREE.Vector3() };
+    if (w <= 0.001 || dt <= 0) { st.q.copy(bone.quaternion); st.w.set(0, 0, 0); continue; }
+    const side = role.endsWith("L") ? "L" : role.endsWith("R") ? "R" : null;
+    const tight = side && /^(arm|elbow|twist|wrist)/.test(role) ? followTight[side] : 0;
+    const om = cfg.speed + (FOLLOW.tightSpeed - cfg.speed) * tight;
+    const zeta = cfg.damping + (1 - cfg.damping) * tight;
+    const steps = Math.max(1, Math.ceil(dt * 120)), h = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      // Abweichung Ziel <-> aktuelle Haltung als Drehvektor (kürzester Weg)
+      _fe.copy(bone.quaternion).multiply(_fstep.copy(st.q).invert());
+      if (_fe.w < 0) { _fe.x = -_fe.x; _fe.y = -_fe.y; _fe.z = -_fe.z; _fe.w = -_fe.w; }
+      const sin = Math.sqrt(_fe.x * _fe.x + _fe.y * _fe.y + _fe.z * _fe.z);
+      const ang = 2 * Math.atan2(sin, _fe.w);
+      if (ang > 2.2) { st.q.copy(bone.quaternion); st.w.set(0, 0, 0); break; }   // Sprung (z. B. nach einem Clip): übernehmen
+      _fd.set(_fe.x, _fe.y, _fe.z).multiplyScalar(sin > 1e-6 ? ang / sin : 2);
+      st.w.addScaledVector(_fd, om * om * h).multiplyScalar(Math.max(0, 1 - 2 * zeta * om * h));
+      const speed = st.w.length();
+      if (speed > 1e-6) st.q.premultiply(_fstep.setFromAxisAngle(_fd.copy(st.w).multiplyScalar(1 / speed), speed * h));
+    }
+    st.q.normalize();
+    if (w >= 0.999) bone.quaternion.copy(st.q); else bone.quaternion.slerp(st.q, w);
+  }
+  followTight.L = followTight.R = 0;
+  if (rig.upper) rig.upper.updateMatrixWorld(true);
+}
+
+/** Wie smoothDamp(), aber für Winkel (nimmt den kürzesten Weg). */
+function angleDiff(target, current) {
+  const d = target - current;
+  return Math.atan2(Math.sin(d), Math.cos(d));
+}
+
+/** Pro Frame: Ruhepose -> Clip (Mixer) -> Standort/Drehung -> Idle (inkl. Blick) -> Schritte planen ->
+    Laufen (Oberkörper) -> Geste -> Streicheln -> Beine (Becken + Fuß-IK) -> Nachschwingen -> Finger -> Physik */
 function updatePose(dt) {
   if (!modelRoot) return;
   const time = performance.now() / 1000;
   resetToRestPose();
+  if (!feet.ready) setupFeet();         // Ruhelage der Füße merken (walk.js)
   updateClips(dt);                      // Blender-Animationen (clips.js)
-  updateWalkWeight(dt);                 // Laufen auf der Stelle weich ein-/ausblenden
+  updateWalkRoot(dt);                   // Figur zum Ziel bewegen/drehen (walk.js)
   modelRoot.updateMatrixWorld(true);
 
   idleWeight = damp(idleWeight, idleEnabled ? 1 : 0, 6, dt);
   updateLook(time, dt);
+  updateStance(time, dt);               // Gewichtsverlagerung im Stand (idle.js)
   if (idleWeight > 0.001) applyIdle(time, idleWeight);
   // Ohne Idle (z. B. während eines Clips) trotzdem dem Mauszeiger folgen -
   // anteilig, damit beim Überblenden Idle <-> Clip nichts springt.
   if (headFollow && idleWeight < 0.999) turnHead(look.yaw, look.pitch, 0, 1 - idleWeight);
-  applyWalk(dt, walk.weight);
+  // Beine: nur mit Idle (ein Clip oder die Ruhepose bestimmen die Beine selbst)
+  updateFeet(dt, idleWeight);           // wann welcher Fuß einen Schritt macht
+  applyWalkUpper(dt, idleWeight);       // Armschwung, Gegendrehung, Vorlage
   applyGesture();                       // Gesten liegen über Idle, Laufen und Clips
   updatePet(dt, time);                  // Streicheln am Kopf (pet.js)
+  applyLegs(dt, idleWeight);            // Becken verlagern, Füße per IK am Boden halten
+  applyFollow(dt, 1 - clipWeight);      // Trägheit: Oberkörper, Kopf und Arme schwingen nach
   // Lockere Finger nur ohne Clip - sonst würden animierte Finger zusätzlich gekrümmt.
   // Handposen einer Geste gelten trotzdem (siehe updateHands).
-  updateHands(1 - clipWeight);
+  updateHands(1 - clipWeight, time);
   // Hände aus dem Rock schieben nur ohne Clip - die Animation soll gelten, wie sie ist
   if (PHYSICS.enabled && physicsInitialized && clipWeight < 0.5) keepHandsOutOfSkirt();
   updatePhysics(dt);
 }
-

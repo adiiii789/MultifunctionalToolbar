@@ -93,9 +93,10 @@ BOARD_BAR_PX = 28    # Titelleiste in board/plugin.html (bis die Seite ihre Grö
 # stations.json: eigene Stationen (Punkte, zu denen die Figur läuft).
 # viewer_settings.json: Stimme an/aus, Lautstärke.
 # assistant_settings.json: KI an/aus, Ergebnisse aufs Board.
+# room_state.json: Raum (Fenster, Licht, Tageszeit, Board zur Seite gerollt).
 WRITABLE_JSON = {"/look_calibration_popup.json", "/look_calibration_window.json",
                  "/panel_state.json", "/stations.json", "/viewer_settings.json",
-                 "/assistant_settings.json"}
+                 "/assistant_settings.json", "/room_state.json"}
 MAX_POST_BYTES = 8192
 MAX_AI_POST_BYTES = 64 * 1024
 CHAT_LOG_MAX = 200     # Chatzeilen, die ein neu geöffneter Viewer (Fenster/Popup) nachgereicht bekommt

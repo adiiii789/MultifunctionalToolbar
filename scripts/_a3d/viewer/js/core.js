@@ -37,7 +37,8 @@ function sendChatMessage(message) {
 
 function addMessage(sender, text) {
   const messageElem = document.createElement("div");
-  messageElem.style.marginBottom = "5px";
+  // Sprechblase je Absender (viewer.css): eigene rechts, Miku links, Hinweise (⚠) mittig
+  messageElem.className = "chat-msg " + (sender === "Du" ? "me" : sender === "⚠" ? "sys" : "bot");
   const name = document.createElement("strong");
   name.textContent = sender + ": ";
   messageElem.append(name, document.createTextNode(text));   // kein HTML aus Nutzertext

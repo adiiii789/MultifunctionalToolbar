@@ -1,0 +1,45 @@
+{#- Rahmen für HTML, das das Sprachmodell mit show_on_board aufs Board bringt
+    (backend/integrations/board.py).
+    Daten:
+      title  str   Überschrift (leer = keine)
+      body   str   HTML des Modells - wird NICHT maskiert (das ist der Zweck)
+      csp    str   Content-Security-Policy: nichts aus dem Netz nachladen
+    Geschützt ist das Board durch die Sandbox des iframes (keine Skripte) und diese Policy. -#}
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="{{ csp }}">
+  <style>
+{% include "theme.css" %}
+{% include "view.css" %}
+    /* Was Modelle typischerweise schreiben, soll ohne eigenes CSS ordentlich aussehen */
+    ul, ol { margin: 0.4em 0 0.8em 0; padding-left: 1.4em; line-height: 1.6; }
+    h3, h4 { margin: 1em 0 0.3em 0; }
+    pre, code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.92em; }
+    pre { padding: 0.8em 1em; border-radius: 8px; overflow: auto; background: rgba(127, 127, 127, 0.14); }
+    code { padding: 0.1em 0.3em; border-radius: 4px; background: rgba(127, 127, 127, 0.14); }
+    pre code { padding: 0; background: none; }
+    img { max-width: 100%; }
+    /* Bedienelemente: Antippen und Eingaben gehen an die KI (viewer/js/assistant.js: hookBoardInput) */
+    button, input, select, textarea { font: inherit; color: var(--text); }
+    button, input[type=button], input[type=submit] {
+      margin: 0.25em 0.4em 0.25em 0; padding: 0.45em 1.1em; border: 0; border-radius: 999px; cursor: pointer;
+      background: var(--accent); color: #fff; font-weight: 600;
+    }
+    button:hover, input[type=button]:hover, input[type=submit]:hover { filter: brightness(1.12); }
+    input[type=text], input[type=number], input[type=date], input[type=time], input[type=email], input:not([type]),
+    select, textarea {
+      margin: 0.25em 0.4em 0.25em 0; padding: 0.4em 0.7em; border: 1px solid var(--border); border-radius: 8px;
+      background: #fff; box-sizing: border-box; max-width: 100%;
+    }
+    input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    label { display: inline-block; margin: 0.2em 0.8em 0.2em 0; }
+    a { color: var(--accent); cursor: pointer; }
+  </style>
+</head>
+<body>
+  {% if title %}<h2>{{ title }}</h2>{% endif %}
+  {{ body | safe }}
+</body>
+</html>

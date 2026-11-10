@@ -198,6 +198,11 @@ function setMorph(name, value) {
 const BLINK = { morph: "Blinzeln", close: 0.07, hold: 0.03, open: 0.11, minGap: 1.5, maxGap: 5.5 };
 const blink = { phase: "wait", t: 0, next: 2 };
 
+/** Jetzt blinzeln (z. B. bei einem großen Blickwechsel, idle.js). */
+function requestBlink() {
+  if (blink.phase === "wait" && blink.t > 0.5) { blink.phase = "blink"; blink.t = 0; }
+}
+
 function updateBlink(dt) {
   if (manualMouthOpen) {               // Ausdruck "X)" schließt die Augen selbst -> nicht blinzeln
     blink.phase = "wait"; blink.t = 0;
@@ -210,9 +215,10 @@ function updateBlink(dt) {
     if (blink.t >= blink.next) { blink.phase = "blink"; blink.t = 0; }
   } else {
     const total = BLINK.close + BLINK.hold + BLINK.open;
-    if (blink.t < BLINK.close) value = blink.t / BLINK.close;
+    // Lid fällt schnell zu und öffnet sich weicher (statt gleichmäßig auf und zu)
+    if (blink.t < BLINK.close) value = EASE.inQuad(blink.t / BLINK.close);
     else if (blink.t < BLINK.close + BLINK.hold) value = 1;
-    else if (blink.t < total) value = 1 - (blink.t - BLINK.close - BLINK.hold) / BLINK.open;
+    else if (blink.t < total) value = 1 - EASE.inOutSine((blink.t - BLINK.close - BLINK.hold) / BLINK.open);
     else {
       blink.phase = "wait"; blink.t = 0;
       // manchmal Doppelblinzeln, sonst zufällige Pause

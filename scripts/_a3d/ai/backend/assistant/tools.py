@@ -14,6 +14,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from backend.views import View
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -37,6 +39,7 @@ class ToolResult:
     content: str
     is_error: bool = False
     attachments: tuple[Attachment, ...] = ()
+    view: View | None = None  # Ansicht fürs Board, die das Werkzeug zeigen will (show_on_board, integrations/board.py)
 
 
 @runtime_checkable

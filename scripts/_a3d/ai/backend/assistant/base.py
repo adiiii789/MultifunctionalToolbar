@@ -18,6 +18,7 @@ class AssistantReply:
     view: View | None = None   # TemplateView oder HtmlView; None = aktuelle Ansicht beibehalten
     attachments: tuple[Attachment, ...] = ()   # Dateien im Chat, z. B. Mail-Anhänge (backend/attachments.py)
     pages: tuple[str, ...] = ()                # Webseiten der Runde fürs Board-iframe, beste zuerst
+    view_requested: bool = False               # view kommt vom Modell selbst (show_on_board) - hat Vorrang vor Webseiten
 
 
 @runtime_checkable

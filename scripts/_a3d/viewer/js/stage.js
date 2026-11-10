@@ -1,5 +1,6 @@
-/* stage.js - Bühne: Hintergrundbild mit Smartboard, Board-Inhalt, Kamera-
+/* stage.js - Bühne: Lage von Raum und Smartboard, Board-Inhalt, Kamera-
    Ausschnitt (Figur links), Mausblick, Panel ein/aus, Debug-Kamera.
+   Den Raum selbst (Fenster, Uhr, Tafel, rollbares Board) zeichnet room.js.
    Teil des 3D-Assistenten (siehe viewer.html für die Ladereihenfolge).
    Alle Dateien sind klassische Skripte und teilen sich den globalen Bereich. */
 
@@ -8,24 +9,25 @@
    ========================================================================= */
 const STAGE = {
   // ---- Breites Layout (Popup breit / Hauptfenster): Figur links, Board rechts ----
-  // Hintergrundbild (beliebiges PNG/JPG). Es wird fensterfüllend skaliert;
-  // abgeschnitten wird auf der Seite von "align" gegenüber (rechts bleibt sichtbar).
-
-  //TODO hier entfernen für transparency
-  background: "assets/stage_background.png",
+  // Hintergrund: null = der gezeichnete Raum aus room.js (Klassenzimmer, rollbares Board).
+  // Oder ein eigenes Bild (PNG/JPG, z. B. "assets/stage_background.png") - dann gibt es
+  // keinen Raum zum Anklicken und das Board bleibt, wo es im Bild gemalt ist.
+  // Raum/Bild werden fensterfüllend skaliert; abgeschnitten wird auf der Seite von
+  // "align" gegenüber (rechts bleibt sichtbar).
+  background: null,
 
   align: "right",                       // "right" | "center" | "left"
-  // Fläche des Smartboards IM BILD, als Anteil von Bildbreite/-höhe (0..1).
+  // Bildfläche des Smartboards als Anteil von Breite/Höhe des Raums (0..1).
   // Bei eigenem Bild: Pixel-Ecke / Bildgröße, z. B. left = 800 / 1920.
   board: { left: 0.3067, top: 0.1389, width: 0.6313, height: 0.5648 },
 
-  // ---- Schmales Layout (Popup schmal): eigenes Bild, kein Board, Figur mittig ----
+  // ---- Schmales Layout: kein Board, Figur mittig ----
   // Umgeschaltet wird, sobald das Fenster schmaler ist als narrowBelowAspect
-  // (Breite / Höhe). Der Wechsel wird weich überblendet.
+  // (Breite / Höhe). Im Fenster sieht man den Ausschnitt des Raums um die Figur,
+  // das schmale Popup ist durchsichtig (nur Figur und Chat).
   narrowBelowAspect: 1.0,
   narrow: {
-    //TODO hier entfernen für transparency
-    background: "assets/stage_background_narrow.png",
+    background: null,                   // eigenes Bild nur fürs schmale Layout (sonst: der Raum)
     character: { screenX: 0.5, viewHeight: 2.0, targetY: 0.88 }
   },
 
@@ -71,16 +73,18 @@ const stageState = {
 };
 
 /* =========================================================================
-   Hintergrund + Board-Fläche
+   Raum/Hintergrund + Board-Fläche
    ========================================================================= */
+const ROOM_SIZE = { width: 1920, height: 1080 };   // Maße des gezeichneten Raums (room.js)
 const stageEl = document.getElementById("stage");
 const panelEl = document.getElementById("anim-panel");
 const stageImg = document.getElementById("stage-bg");
 const narrowImg = document.getElementById("stage-narrow-bg");
-// Im Popup ohne Bild im schmalen Layout (viewer.css) - dort ist das Popup durchsichtig (POPUP_TRANSPARENT)
+// Im Popup ohne Raum im schmalen Layout (viewer.css) - dort ist das Popup durchsichtig (POPUP_TRANSPARENT)
 document.body.classList.toggle("view-popup",
   (new URLSearchParams(location.search).get("mode") || "").toLowerCase() === "popup");
 const boardEl = document.getElementById("board");
+const boardUnitEl = document.getElementById("board-unit");   // Board samt Rahmen und Ständer
 const boardFrame = document.getElementById("board-frame");
 
 /** Layout wählen: schmales Fenster -> eigenes Bild ohne Board, Figur mittig. */
@@ -91,26 +95,43 @@ function updateLayoutMode() {
 updateLayoutMode();   // sofort, damit die Figur nicht erst von der falschen Seite hereingleitet
 
 function layoutStage() {
-  const iw = stageImg.naturalWidth, ih = stageImg.naturalHeight;
+  const iw = STAGE.background ? stageImg.naturalWidth : ROOM_SIZE.width;
+  const ih = STAGE.background ? stageImg.naturalHeight : ROOM_SIZE.height;
   const W = window.innerWidth, H = window.innerHeight;
   updateLayoutMode();
-  if (!iw || !ih) {                     // kein Bild: Board über die rechte Hälfte
-    Object.assign(stageEl.style, { left: "0px", top: "0px", width: W + "px", height: H + "px" });
-  } else {
+  let sw = W, sh = H, left = 0;
+  if (iw && ih) {                       // (Bild noch nicht geladen/fehlt: Bühne = Fenster)
     const s = Math.max(W / iw, H / ih);  // "cover": Fenster immer voll
-    const sw = iw * s, sh = ih * s;
-    const left = STAGE.align === "right" ? W - sw : STAGE.align === "left" ? 0 : (W - sw) / 2;
-    Object.assign(stageEl.style, {
-      left: left + "px", top: (H - sh) / 2 + "px", width: sw + "px", height: sh + "px"
-    });
+    sw = iw * s; sh = ih * s;
+    left = STAGE.align === "right" ? W - sw : STAGE.align === "left" ? 0 : (W - sw) / 2;
+    // Schmal: Der Ausschnitt des Raums, in dem die Figur steht, kommt in die Fenstermitte
+    if (stageState.narrow && !STAGE.background) left = clamp(W / 2 - STAGE.character.screenX * sw, W - sw, 0);
   }
+  Object.assign(stageEl.style, {
+    left: left + "px", top: (H - sh) / 2 + "px", width: sw + "px", height: sh + "px",
+    fontSize: sw / 100 + "px"           // 1em = 1 % der Raumbreite (Maße in viewer.css)
+  });
   const b = STAGE.board;
-  Object.assign(boardEl.style, {
+  Object.assign(boardUnitEl.style, {
     left: b.left * 100 + "%", top: b.top * 100 + "%",
     width: b.width * 100 + "%", height: b.height * 100 + "%"
   });
+  // Ständer reicht vom Board bis zum Boden des Raums
+  const floor = typeof ROOM !== "undefined" ? ROOM.floorY : 0.87;
+  boardUnitEl.style.setProperty("--leg", Math.max(0, (floor - b.top - b.height) * sh / (sw / 100)).toFixed(2) + "em");
   layoutChatAndPanel();
 }
+
+/** Lage des Boards an seinem Platz (Fenster-px) - auch wenn es gerade zur Seite gerollt ist.
+    Danach richten sich Chat, Stationen und das Plugin auf dem Board. */
+function boardHomeRect() {
+  const s = stageEl.getBoundingClientRect(), b = STAGE.board;
+  const left = s.left + b.left * s.width, top = s.top + b.top * s.height;
+  const width = b.width * s.width, height = b.height * s.height;
+  return { left, top, width, height, right: left + width, bottom: top + height };
+}
+/** Board gerade zur Seite gerollt? (room.js) */
+function boardIsAside() { return typeof room !== "undefined" && room.boardAside; }
 
 /** Chat genau unter das Board setzen und die Leiste darüber enden lassen,
     damit sich Chat, Board und Gesten-Leiste nie überlappen. */
@@ -120,13 +141,13 @@ function layoutChatAndPanel() {
   // Schmales Layout: kein Board -> Chat unten über die ganze Breite, max. ~32 % Höhe
   const r = stageState.narrow
     ? { left: 0, right: W, bottom: H * 0.68 - c.gap }
-    : boardEl.getBoundingClientRect();
+    : boardHomeRect();
   const left = Math.max(c.side, r.left, stageState.narrow ? 0 : W * c.minLeft);
   const right = Math.min(W - c.side, r.right);
   const free = H - r.bottom - c.gap - c.bottom;          // Platz unter dem Board
   const collapsed = Math.max(c.minHeight, free);
   // Aufgeklappt: feste Höhe bis zur Oberkante des Boards (schmal: fast bis oben)
-  const top = stageState.narrow ? H * c.expandedTop : boardEl.getBoundingClientRect().top;
+  const top = stageState.narrow ? H * c.expandedTop : boardHomeRect().top;
   const height = chatExpanded ? Math.max(collapsed, H - c.bottom - top) : collapsed;
   Object.assign(chat.style, {
     left: left + "px", right: "auto", width: Math.max(160, right - left) + "px",
@@ -158,12 +179,13 @@ stageImg.addEventListener("error", () => {
   stageImg.style.display = "none";
   layoutStage();
 });
-stageImg.src = STAGE.background;
+if (STAGE.background) stageImg.src = STAGE.background;
 narrowImg.addEventListener("error", () => {
   console.warn("Hintergrundbild (schmal) nicht gefunden: " + STAGE.narrow.background);
   narrowImg.style.display = "none";
 });
-narrowImg.src = STAGE.narrow.background;
+document.body.classList.toggle("narrow-image", !!STAGE.narrow.background);
+if (STAGE.narrow.background) narrowImg.src = STAGE.narrow.background;
 window.addEventListener("resize", layoutStage);
 
 /** Inhalt aufs Board bringen: URL/Dateipfad (iframe) oder HTML-Text (ganzes Dokument, z. B. vom
@@ -174,6 +196,8 @@ function showOnBoard(content, keepPlugin) {
   content = String(content || "");
   if (keepPlugin && boardPlugin.active) { boardPlugin.behind = content; return; }
   boardPlugin.active = false;                // neuer Inhalt löst ein Plugin auf dem Board ab
+  // Zur Seite gerolltes Board kommt zurück, wenn es etwas zu zeigen gibt (room.js)
+  if (content && content !== boardContent && boardIsAside() && ROOM.boardReturnsOnContent) setBoardAside(false);
   boardContent = content;
   const looksLikeUrl = /^(https?:|file:|\.{0,2}\/)|\.html?(\?|#|$)/i.test(content.trim());
   boardEl.classList.toggle("empty", !content);
@@ -183,13 +207,18 @@ function showOnBoard(content, keepPlugin) {
     boardFrame.removeAttribute("sandbox");
     boardFrame.src = content.trim();
   } else {
-    boardFrame.setAttribute("sandbox", "");   // vor srcdoc setzen: gilt ab dieser Navigation
+    // Sandbox OHNE Skripte (vor srcdoc setzen: gilt ab dieser Navigation). "allow-same-origin" lässt
+    // den Inhalt nichts ausführen, erlaubt aber dem Viewer, von außen hineinzuschauen - so bekommt
+    // die KI mit, was auf dem Board angetippt oder eingegeben wird (assistant.js: hookBoardInput).
+    boardFrame.setAttribute("sandbox", "allow-same-origin");
     boardFrame.srcdoc = /^\s*<(!doctype|html)/i.test(content) ? content
       : "<!doctype html><meta charset='utf-8'>" +
         "<style>body{margin:0;padding:3%;font-family:'Segoe UI',sans-serif;color:#1d2a33}</style>" + content;
   }
 }
 function clearBoard() { showOnBoard(""); }
+// Nach jedem Laden: Eingaben auf HTML-Inhalten (srcdoc) an die KI weiterreichen (assistant.js)
+boardFrame.addEventListener("load", () => { if (typeof hookBoardInput === "function") hookBoardInput(); });
 
 /** Webseite aufs Board (board/web.html: Kopfleiste + Sandbox, standardmäßig ohne Skripte).
     Nur http(s); ob die Seite öffentlich ist und eingebettet werden darf, prüft der KI-Dienst. */
@@ -211,6 +240,7 @@ function showPluginOnBoard(url) {
   if (!boardPlugin.active) boardPlugin.behind = boardContent;
   boardPlugin.active = true;
   boardPlugin.turn = true;
+  if (boardIsAside()) setBoardAside(false);  // ein Plugin braucht das Board an seinem Platz
   boardEl.classList.remove("empty");
   boardFrame.removeAttribute("srcdoc");
   boardFrame.removeAttribute("sandbox");     // eigene Seite vom Asset-Server, braucht Skripte
@@ -222,9 +252,9 @@ function hidePluginFromBoard() {
   showOnBoard(behind == null ? STAGE.boardStart : behind);
 }
 function boardInfo() {
-  const r = boardEl.getBoundingClientRect();
+  const r = boardHomeRect();
   return JSON.stringify({ x: r.left, y: r.top, w: r.width, h: r.height,
-                          visible: !stageState.narrow, plugin: boardPlugin.active });
+                          visible: !stageState.narrow && !boardIsAside(), plugin: boardPlugin.active });
 }
 showOnBoard(STAGE.boardStart);
 
@@ -271,26 +301,25 @@ function applyCameraFraming() {
    ========================================================================= */
 const _ndc = new THREE.Vector2(), _headPos = new THREE.Vector3();
 let mouseClientX = window.innerWidth * 0.6, mouseClientY = window.innerHeight * 0.4;
-window.addEventListener("mousemove", (e) => {
-  mouseClientX = e.clientX; mouseClientY = e.clientY;
-  if (typeof petMouseMoved === "function") petMouseMoved(mouseClientX, mouseClientY);   // Streicheln (pet.js)
-});
+var mouseMovedAt = performance.now() / 1000;   // letzte Mausbewegung (s) - idle.js: danach schaut sie sich selbst um
+function mouseMovedTo(x, y) {
+  if (Math.abs(x - mouseClientX) + Math.abs(y - mouseClientY) > 2) mouseMovedAt = performance.now() / 1000;
+  mouseClientX = x; mouseClientY = y;
+  if (typeof petMouseMoved === "function") petMouseMoved(x, y);   // Streicheln (pet.js)
+}
+window.addEventListener("mousemove", (e) => mouseMovedTo(e.clientX, e.clientY));
 
 /** Mausposition von außen setzen (Fensterkoordinaten in px, dürfen auch
     außerhalb des Fensters liegen). Das Plugin ruft das ~30x/s auf, damit der
     Blick auch über dem Board-iframe und über den ganzen Bildschirm folgt. */
-function setExternalMouse(x, y) {
-  mouseClientX = x;
-  mouseClientY = y;
-  if (typeof petMouseMoved === "function") petMouseMoved(x, y);
-}
+function setExternalMouse(x, y) { mouseMovedTo(x, y); }
 
-/** Kopfdrehung (yaw/pitch, Körperraum) zum Mauszeiger. null = kein Ziel.
+/** Kopfdrehung (yaw/pitch, Körperraum) zum Mauszeiger (oder zu einem anderen Punkt im Fenster, px). null = kein Ziel.
     Gerechnet wird mit dem Abstand Maus <-> Mittelpunkt (STAGE.lookCenter) auf
     dem Bildschirm: Maus im Mittelpunkt = geradeaus, sonst dreht der Kopf hin. */
-function getMouseLook() {
+function getMouseLook(x = mouseClientX, y = mouseClientY) {
   if (!camera || !rig.head || !modelRoot) return null;
-  _ndc.set(mouseClientX / window.innerWidth * 2 - 1, -(mouseClientY / window.innerHeight) * 2 + 1);
+  _ndc.set(x / window.innerWidth * 2 - 1, -(y / window.innerHeight) * 2 + 1);
   const c = lookCenterNdc();
   const L = STAGE.lookLimits;
   // Falls die Figur gedreht ist: links/rechts in Körperrichtung umrechnen

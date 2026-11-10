@@ -65,12 +65,16 @@ function setupAnimationPanel(skippedClips = 0) {
   const panel = document.getElementById("anim-panel");
   panel.appendChild(animButton(IDLE_NAME, IDLE_NAME));
   panel.appendChild(animButton(WALK_PLACE_NAME, WALK_PLACE_NAME));
+  // Alte Laufanimation (gleichmäßiger Zyklus) oder die neue mit einzelnen Schritten (walk.js)
+  panel.appendChild(makeToggle("🚶 Alte Laufanimation", () => WALK.classic, v => { WALK.classic = v; }));
   const stopBtn = document.createElement("button");
   stopBtn.textContent = "⏹ Stopp (Ruhepose)";
   stopBtn.onclick = stopAnimation;
   panel.appendChild(stopBtn);
 
   buildStationSection(panel);           // Stationen für Präsentationen (stations.js)
+  if (document.body.classList.contains("room-builtin")) buildRoomSection(panel);   // Raum: Board, Fenster, Licht (room.js)
+  buildRoom3dSection(panel);            // 3D-Raum: Lage einstellen (room3d.js)
 
   // Blender-Clips, gruppiert nach Kategorie (<Kategorie>_<Name>)
   const cats = getClipCategories();

@@ -59,6 +59,11 @@ const MORPHS = {
 
 // Morphs, die die Augen schließen -> währenddessen nicht zusätzlich blinzeln
 const EYE_CLOSERS = { blink: 1, eyesHappy: 1, eyesSqueeze: 1, eyesHau: 1, eyesCalm: 0.8, eyesHalf: 0.45 };
+// Diese Morphs schließen das Auge ganz. Bei 0.75 oder 0.9 bleibt ein Spalt, durch den man die Pupille
+// sieht - das wirkt kaputt statt "fast zu". Deshalb: Soll so ein Morph überwiegend zu sein
+// (ab EYE_SHUT_FROM), geht er ganz zu. Darunter bleibt der Wert, wie er ist (bewusst halb offen).
+const EYE_SHUTTERS = new Set(["eyesHappy", "eyesSqueeze", "eyesHau"]);
+const EYE_SHUT_FROM = 0.6;
 // Mund-Morphs der Ausdrücke -> beim Sprechen abschwächen
 const MOUTH_ROLES = new Set(Object.keys(MORPHS).filter(k => k.startsWith("mouth")));
 
@@ -69,7 +74,7 @@ const EXPRESSIONS = {
   neutral:   {},
   smile:     { mouthSmirk: 0.95, eyesSmile: 0.5, browSmile: 0.6 },
   friendly:  { mouthSmirk: 0.6, eyesSmile: 0.45, browSmile: 0.7, browUp: 0.25 },
-  happy:     { eyesHappy: 0.9, mouthCatOpen: 0.55, browSmile: 0.8 },
+  happy:     { eyesHappy: 1.0, mouthCatOpen: 0.55, browSmile: 0.8 },
   laugh:     { eyesHappy: 1.0, mouthWa: 0.65, browSmile: 0.9 },
   surprised: { eyesWide: 0.85, mouthTriangle: 0.7, browUp: 0.9 },
   curious:   { browUp: 0.55, mouthSmirk: 0.3, eyesWide: 0.15 },
@@ -79,7 +84,7 @@ const EXPRESSIONS = {
   sad:       { browTroubled: 1.0, eyesDroopy: 0.9, eyesHalf: 0.25, mouthPout: 0.45 },
   proud:     { eyesCalm: 0.55, mouthSmirk: 0.8, browSmile: 0.5 },
   annoyed:   { eyesHalf: 0.6, mouthPout: 0.4, browAngry: 0.3 },
-  content:   { eyesHappy: 0.75, mouthSmirk: 0.6, browSmile: 0.6 },      // zufrieden, Augen ^^ (Verbeugen)
+  content:   { eyesHappy: 1.0, mouthSmirk: 0.6, browSmile: 0.6 },      // zufrieden, Augen ^^ (Verbeugen)
   engaged:   { browUp: 0.3, mouthSmirk: 0.25, eyesSharp: 0.2 },         // bei der Sache (Erklären)
   petted:    { eyesHau: 1.0, mouthSmirk: 0.5, browSmile: 0.5 }          // gestreichelt: Augen >< (pet.js)
 };
@@ -186,10 +191,12 @@ function updateExpressions(dt) {
   const roles = new Set([...Object.keys(target), ...Object.keys(expr.weights)]);
   for (const role of roles) {
     let goal = clamp(target[role] || 0, 0, 1);
+    if (EYE_SHUTTERS.has(role) && goal >= EYE_SHUT_FROM) goal = 1;
     if (MOUTH_ROLES.has(role)) goal *= 1 - 0.75 * expr.speak;
     if (!expr.vel[role]) expr.vel[role] = { v: 0 };
     // weich mit Beschleunigen und Abbremsen (statt linear)
-    const w = clamp(smoothDamp(expr.weights[role] || 0, goal, expr.vel[role], 0.12, dt), 0, 1);
+    let w = clamp(smoothDamp(expr.weights[role] || 0, goal, expr.vel[role], 0.12, dt), 0, 1);
+    if (goal === 1 && w > 0.985) w = 1;                 // die Feder nähert sich nur an - ganz zu heißt genau 1
     expr.weights[role] = w;
     setRole(role, w);
     if (EYE_CLOSERS[role]) eyeClosedness = Math.max(eyeClosedness, w * EYE_CLOSERS[role]);

@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -39,18 +40,26 @@ log = logging.getLogger(__name__)
 
 PUSH_TIMEOUT_S = 10
 PAGE_CHECK_BUDGET_S = 6          # so lange insgesamt auf die Einbett-Prüfung der Seiten warten
+PAGE_SCROLL_TO_ANSWER = True     # Seite im Board dorthin scrollen, wo die Antwort steht (mcp_servers/web.py: page_anchor)
+PAGE_ANCHOR_BUDGET_S = 4         # so lange dafür höchstens warten - sonst bleibt die Seite oben
+_ACTION = re.compile(r"\[[^\[\]]{1,300}\]")   # [geste.winken] u. Ä. gehören nicht zum Antworttext
 _renderer = ViewRenderer(config.TEMPLATE_DIR)
 
 
 def present(reply: AssistantReply) -> dict[str, Any]:
-    return {"text": reply.text, "view": _view_to_json(reply.view),
+    view = _view_to_json(reply.view)
+    if view is not None and reply.view_requested:
+        view["requested"] = True          # vom Modell selbst (show_on_board): Vorrang vor Webseiten im Viewer
+    return {"text": reply.text, "view": view,
             "attachments": [{"name": a.name, "uri": a.uri} for a in reply.attachments],
-            "page": _page_to_json(reply.pages)}
+            "page": _page_to_json(reply.pages, reply.text)}
 
 
-def _page_to_json(urls: tuple[str, ...]) -> dict | None:
+def _page_to_json(urls: tuple[str, ...], answer: str = "") -> dict | None:
     """Erste Seite (in Reihenfolge), die sich einbetten lässt - alle parallel geprüft, höchstens
-    PAGE_CHECK_BUDGET_S lang (eine langsame Seite hält die Antwort nicht auf)."""
+    PAGE_CHECK_BUDGET_S lang (eine langsame Seite hält die Antwort nicht auf). Die Adresse bekommt,
+    wenn möglich, ein Sprungziel zu der Stelle, an der die Antwort steht (sonst zeigt das Board
+    immer den Seitenanfang)."""
     if not urls:
         return None
     from mcp_servers import web            # liegt im Ordner des Dienstes (Arbeitsverzeichnis)
@@ -66,11 +75,21 @@ def _page_to_json(urls: tuple[str, ...]) -> dict | None:
             except Exception:  # noqa: BLE001  # Prüfung ist ein Extra - nie die Antwort scheitern lassen
                 continue
             if checked is not None:
-                return {"url": checked[0], "title": checked[1]}
+                return {"url": _with_anchor(pool, web, checked[0], answer), "title": checked[1]}
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
     log.info("Keine der %d Seiten lässt sich einbetten (oder antwortet) - Board bleibt", len(urls))
     return None
+
+
+def _with_anchor(pool: ThreadPoolExecutor, web, url: str, answer: str) -> str:
+    answer = _ACTION.sub(" ", answer or "")
+    if not PAGE_SCROLL_TO_ANSWER or not answer.strip():
+        return url
+    try:
+        return pool.submit(web.page_anchor, url, answer).result(timeout=PAGE_ANCHOR_BUDGET_S) or url
+    except Exception:  # noqa: BLE001  # ein Extra - Zeitüberschreitung oder Fehler: Seite bleibt oben
+        return url
 
 
 def push(reply: AssistantReply) -> bool:

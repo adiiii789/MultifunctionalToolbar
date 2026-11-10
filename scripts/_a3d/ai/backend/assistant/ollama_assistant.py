@@ -8,7 +8,8 @@ Ablauf von reply(message):
      auf (eigene Integrationen oder MCP-Server) und hängt jedes Ergebnis als
      "tool"-Nachricht an. Weiter bei 3 - höchstens max_tool_rounds-mal.
   5. Sonst ist der Text des Modells die Antwort. Wurden Werkzeuge genutzt,
-     zeigt die Ansicht oben eine Tabelle mit Aufrufen und Ergebnissen. Dateien,
+     zeigt die Ansicht oben eine Tabelle mit Aufrufen und Ergebnissen - außer das
+     Modell hat mit show_on_board selbst etwas aufs Board gebracht, dann das. Dateien,
      die Werkzeuge mitliefern (z. B. Mail-Anhänge), hängen an der Antwort.
 """
 from __future__ import annotations
@@ -134,8 +135,10 @@ class OllamaAssistant:
         self.history[start:] = [replace(m, thinking="", provider_content=()) if m.thinking or m.provider_content
                                 else m for m in self.history[start:]]
         self._trim_history()
-        return AssistantReply(text, _tool_view(tool_log) if tool_log else None, _attachments(tool_log),
-                              _page_candidates(tool_log))
+        requested = _requested_view(tool_log)
+        return AssistantReply(text, requested or (_tool_view(tool_log) if tool_log else None),
+                              _attachments(tool_log), _page_candidates(tool_log),
+                              view_requested=requested is not None)
 
     def _run(self, system: ChatMessage, tool_log: list[tuple[ToolCall, ToolResult]]) -> str:
         tools = self.tools.list_tools()
@@ -355,6 +358,12 @@ def _tool_view(tool_log: list[tuple[ToolCall, ToolResult]]) -> TemplateView:
              ("Fehler: " if c["error"] else "") + c["result"]] for c in calls]
     return TemplateView("tool_calls", {"title": "Ausgeführt", "calls": calls,
                                        "columns": ["Werkzeug", "Argumente", "Ergebnis"], "rows": rows})
+
+
+def _requested_view(tool_log: list[tuple[ToolCall, ToolResult]]):
+    """Ansicht, die das Modell selbst aufs Board gebracht hat (show_on_board) - die letzte der Runde."""
+    return next((result.view for _, result in reversed(tool_log) if result.view is not None and not result.is_error),
+                None)
 
 
 _URL = re.compile(r"https?://[^\s<>\"']+")

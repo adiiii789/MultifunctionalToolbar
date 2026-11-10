@@ -124,6 +124,8 @@ function animate() {
   updatePose(__dt);
   updateGroundShadow();
   updateStageFraming(__dt);           // Figur gleitet bei Layoutwechsel an die neue Stelle
+  updateRoom(__dt);                   // Wind bei offenem Fenster (room.js)
+  updateRoom3d(__dt);                 // 3D-Raum im Hintergrund, falls geladen (room3d.js)
 
   updateFace(__dt);
 

@@ -1,23 +1,172 @@
   body { margin: 0; overflow: hidden; background: transparent; }
   /* 3D-Canvas liegt transparent ÜBER der Bühne und lässt Mausklicks durch */
-  canvas { display: block; position: fixed; inset: 0; z-index: 10; pointer-events: none; }
+  body > canvas { display: block; position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 10; pointer-events: none; }
 
-  /* Bühne: Hintergrundbild + Board (Position setzt stage.js passend zum Bild) */
-  #stage { position: fixed; z-index: 1; transition: opacity 0.35s ease; }
-  /* Schmales Layout: eigenes Bild (fensterfüllend, mittig), breites Bild + Board ausblenden */
+  /* Achtung: Das Plugin läuft mit Qt WebEngine 5.15 = Chromium 83. Neuere CSS-Kurzformen wie
+     "inset" kennt es nicht (dann hat das Element keine Größe) - top/right/bottom/left ausschreiben. */
+  /* Bühne: Raum + Board (Position setzt stage.js). 1em = 1 % der Raumbreite - alle Maße des
+     Raums in em, dann passt alles zusammen, egal wie groß das Fenster ist. */
+  #stage { position: fixed; z-index: 1; transition: opacity 0.35s ease; overflow: hidden; }
+  /* Eigenes Bild fürs schmale Layout (STAGE.narrow.background): fensterfüllend, mittig */
   #stage-narrow-bg {
-    position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover;
-    z-index: 0; opacity: 0; transition: opacity 0.35s ease; user-select: none;
+    position: fixed; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; object-fit: cover;
+    z-index: 0; opacity: 0; transition: opacity 0.35s ease; user-select: none; display: none;
   }
-  body.layout-narrow #stage { opacity: 0; pointer-events: none; }
-  body.layout-narrow #stage-narrow-bg { opacity: 1; }
-  /* Schmales Popup: kein Bild - nur Figur und Chat über dem durchsichtigen Popup */
-  body.view-popup.layout-narrow #stage-narrow-bg { opacity: 0; }
-  #stage-bg { position: absolute; inset: 0; width: 100%; height: 100%; user-select: none; }
-  #board { position: absolute; overflow: hidden; background: white; }
+  body.narrow-image #stage-narrow-bg { display: block; }
+  body.narrow-image.layout-narrow #stage { opacity: 0; pointer-events: none; }
+  body.narrow-image.layout-narrow #stage-narrow-bg { opacity: 1; }
+  /* Schmales Popup: kein Raum - nur Figur und Chat über dem durchsichtigen Popup */
+  body.view-popup.layout-narrow #stage, body.view-popup.layout-narrow #stage-narrow-bg { opacity: 0; pointer-events: none; }
+  /* Schmales Layout: Raum ohne Board */
+  body.layout-narrow #board-unit, body.layout-narrow #chalk { opacity: 0; pointer-events: none; }
+  #stage-bg { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; user-select: none; display: none; }
+  body:not(.room-builtin) #stage-bg { display: block; }
+  body:not(.room-builtin) #room, body:not(.room-builtin) #chalk, body:not(.room-builtin) #room-shade,
+  body:not(.room-builtin) .deco { display: none; }
+
+  /* 3D-Raum (room3d.js): eigenes Canvas ganz hinten; der gezeichnete Raum und seine Tafel entfallen */
+  #room3d { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; display: block; pointer-events: none; }
+  body.room-3d #room, body.room-3d #chalk, body.room-3d #room-shade { display: none; }   /* Tageszeit färbt der 3D-Raum selbst */
+  body.view-popup.layout-narrow #room3d { display: none; }
+
+  /* ---- Raum (room.js zeichnet ihn; hier Farben je Tageszeit und die Bewegungen) ----
+     Bildrate: Dauernd bewegen dürfen sich nur die kleinen Ebenen (.cloud, .curtain) und nur per
+     transform/opacity. Keine Daueranimation, kein mix-blend-mode, kein filter in den großen
+     Zeichnungen (.room-back/.room-front) - sonst malt der Browser sie jedes Bild neu. */
+  #room {
+    position: absolute; top: 0; right: 0; bottom: 0; left: 0; user-select: none;
+    --wall-top: #f4f8fd; --wall-bottom: #e3edf8; --wall-line: #c9d8ea; --panel: #d5e4f3; --trim: #ffffff;
+    --frame-edge: #b7c8dc; --floor-top: #ead9bd; --floor-bottom: #cdb590; --floor-line: #b89c74;
+    --sky-top: #3f9df2; --sky-bottom: #a9dcff; --sky-horizon: #e4f6ff; --sun: #fffbe6; --cloud: #ffffff;
+  }
+  #room .room-back, #room .room-front { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; will-change: transform; }
+  #room .room-front { pointer-events: none; }
+  #room .room-front .hot { pointer-events: auto; }
+  #room.tod-evening {
+    --wall-top: #fdf1e6; --wall-bottom: #f5dfcf; --panel: #ecd3c4; --floor-top: #e8c9a4; --floor-bottom: #c59f78;
+    --sky-top: #6a6fc0; --sky-bottom: #ff9f6e; --sky-horizon: #ffd89a; --sun: #ffc27a; --cloud: #ffd9c2;
+  }
+  #room.tod-night {
+    --wall-top: #dfe6f5; --wall-bottom: #cfd9ee; --panel: #c2cee6;
+    --sky-top: #0c1838; --sky-bottom: #24407a; --sky-horizon: #4a6aa8; --sun: #9db8ff; --cloud: #8fa3cf;
+  }
+  #room .hot { cursor: pointer; }
+  #room .hot:hover { opacity: 0.86; }
+  #room .chalk-text { fill: #f4f7f2; opacity: 0.8; font-family: "Segoe Print", "Comic Sans MS", cursive; }
+  #room #chalkboard.used .chalk-text { opacity: 0; }
+  /* Himmel: Wolken ziehen als eigene kleine Ebenen */
+  #room .room-sky { position: absolute; overflow: hidden; pointer-events: none; }
+  #room .cloud { position: absolute; left: 0; fill: var(--cloud); opacity: 0.95; will-change: transform; animation: cloud-drift linear infinite; }
+  #room .cloud-a { animation-duration: 95s; animation-delay: -30s; }
+  #room .cloud-b { animation-duration: 140s; animation-delay: -95s; opacity: 0.8; }
+  #room .cloud-c { animation-duration: 70s; animation-delay: -55s; }
+  @keyframes cloud-drift { from { transform: translateX(-14em); } to { transform: translateX(20em); } }
+  #room.tod-night .cloud { opacity: 0.45; }
+  #room .sun { fill: var(--sun); } #room .sun-halo { fill: #ffffff; opacity: 0.35; }
+  #room .moon, #room .stars { opacity: 0; }
+  #room .hills { fill: #9fd8b4; } #room .hills.near { fill: #7fc89d; }
+  #room.tod-evening .sun, #room.tod-evening .sun-halo { transform: translate(-60px, 290px); }
+  #room.tod-evening .sun { fill: #ffd08a; }
+  #room.tod-evening .hills { fill: #b98f8f; } #room.tod-evening .hills.near { fill: #96717c; }
+  #room.tod-night .sun, #room.tod-night .sun-halo { opacity: 0; }
+  #room.tod-night .moon, #room.tod-night .stars { opacity: 1; }
+  #room.tod-night .hills { fill: #2b3f66; } #room.tod-night .hills.near { fill: #213355; }
+  /* Sonnenlicht im Raum */
+  #room .shaft { opacity: 0.5; pointer-events: none; }
+  #room .bloom { opacity: 0.5; pointer-events: none; }
+  #room.tod-evening .shaft { opacity: 0.42; } #room.tod-night .shaft { opacity: 0.14; }
+  #room.tod-night .bloom { opacity: 0.22; }
+  /* Fenster öffnen: rechter Flügel schiebt sich vor den linken (einmalig, kein Dauerlauf) */
+  #room .sash-move { transition: transform 0.9s cubic-bezier(0.5, 0, 0.2, 1); }
+  #room.window-open .sash-move { transform: translateX(-170px); }
+  /* Vorhänge: eigene kleine Ebenen. Wiegen leicht, bei offenem Fenster bauschen sie sich im Wind */
+  #room .curtain { position: absolute; overflow: visible; pointer-events: none; will-change: transform; transform-origin: 50% 0; animation: curtain-sway 7s ease-in-out infinite; }
+  #room .curtain-r { animation-duration: 8.5s; animation-delay: -3s; }
+  @keyframes curtain-sway { 0%, 100% { transform: skewX(-0.6deg); } 50% { transform: skewX(0.8deg) scaleX(1.02); } }
+  #room.window-open .curtain { animation: curtain-wind 2.6s ease-in-out infinite; }
+  #room.window-open .curtain-r { animation-duration: 3.1s; animation-delay: -1.2s; }
+  @keyframes curtain-wind {
+    0%, 100% { transform: skewX(2deg) scaleX(1.05); } 30% { transform: skewX(9deg) scaleX(1.22); }
+    55% { transform: skewX(4deg) scaleX(1.1); } 78% { transform: skewX(11deg) scaleX(1.28); }
+  }
+  #room #clock-hands { position: absolute; pointer-events: none; }
+  /* Lampen + Schalter */
+  #room .lamp-bulb { fill: #cfd8e3; }
+  #room .lamp-glow { opacity: 0; pointer-events: none; }
+  #room.lamp-on .lamp-bulb { fill: #fff3c4; } #room.lamp-on .lamp-glow { opacity: 0.55; }
+  #room.tod-night.lamp-on .lamp-glow { opacity: 1; }
+  #room .switch-knob { fill: #9fb3c8; transform: translateY(14px); }
+  #room.lamp-on .switch-knob { fill: #3fb9d6; transform: none; }
+  /* Pflanze: bewegt sich nur, wenn man sie anklickt */
+  #room .plant-leaves { transform-box: fill-box; transform-origin: 50% 100%; }
+  #room #plant.rustle .plant-leaves { animation: plant-rustle 0.9s ease-out; }
+  @keyframes plant-rustle {
+    0% { transform: rotate(0); } 15% { transform: rotate(-7deg) scale(1.04); } 35% { transform: rotate(6deg); }
+    55% { transform: rotate(-4deg); } 75% { transform: rotate(2deg); } 100% { transform: rotate(0); }
+  }
+  #room .flower { transform-box: fill-box; transform-origin: 50% 100%; transform: scale(0); transition: transform 0.8s cubic-bezier(0.3, 1.6, 0.5, 1); }
+  #room.bloom-flower .flower { transform: scale(1); }
+  /* Abend/Nacht: Farbschleier über dem Raum (nicht über dem Board - das leuchtet selbst) */
+  #room-shade { position: absolute; top: 0; right: 0; bottom: 0; left: 0; pointer-events: none; opacity: 0; background: #16224f; transition: opacity 0.8s; }
+  #room-shade.tod-evening { background: #ff8a3c; opacity: 0.07; }
+  #room-shade.tod-night { opacity: 0.5; }
+  #room-shade.tod-night.lamp-on { background: #4a3a20; opacity: 0.16; }
+  /* Tafel zum Malen */
+  #chalk { position: absolute; cursor: crosshair; touch-action: none; transition: opacity 0.35s; }
+  #chalk.wipe { opacity: 0; }
+
+  /* ---- Board: Rahmen, Bildfläche, Ständer mit Rollen. --dx verschiebt es (room.js) ---- */
+  #board-unit {
+    position: absolute; --dx: 0em; --roll: 0rad; --slide: 1.25s;
+    transform: translateX(var(--dx)); transition: opacity 0.35s ease;
+  }
+  #board-unit.sliding { transition: transform var(--slide) cubic-bezier(0.5, 0, 0.18, 1), opacity 0.35s ease; }
+  #board-unit.settle .board-case, #board-unit.settle #board { animation: board-settle calc(var(--slide) + 0.5s) ease-out; transform-origin: 50% 130%; }
+  @keyframes board-settle {
+    0% { transform: rotate(0); } 12% { transform: rotate(-0.5deg); } 62% { transform: rotate(-0.15deg); }
+    78% { transform: rotate(0.45deg); } 90% { transform: rotate(-0.15deg); } 100% { transform: rotate(0); }
+  }
+  #board { position: absolute; top: 0; right: 0; bottom: 0; left: 0; overflow: hidden; background: white; }
   #board iframe { width: 100%; height: 100%; border: 0; display: block; background: transparent; }
   #board.empty iframe { visibility: hidden; }
   #board.debug { outline: 2px dashed #ff3b8d; }  /* Board-Fläche im Debug-Modus sichtbar */
+  .board-case {
+    position: absolute; top: -1.05em; right: -1.05em; bottom: -1.05em; left: -1.05em; border-radius: 0.9em; background: #262d3b;
+    box-shadow: 0 0 0 0.12em #3a4354 inset, 0 0.5em 0.9em rgba(40, 60, 95, 0.3);
+  }
+  .board-case::before {   /* Kamera oben */
+    content: ""; position: absolute; left: 50%; top: 0.36em; width: 0.36em; height: 0.36em; margin-left: -0.18em;
+    border-radius: 50%; background: #19d39a; box-shadow: 0 0 0.4em #19d39a;
+  }
+  .board-case::after {    /* Leiste unten mit Betriebslicht */
+    content: ""; position: absolute; right: 9%; bottom: 0.33em; width: 3.6em; height: 0.36em; border-radius: 0.2em;
+    background: #2bc4e3; box-shadow: 0 0 0.5em rgba(43, 196, 227, 0.8);
+  }
+  .board-stand { position: absolute; left: 0; right: 0; top: 100%; height: var(--leg, 8em); pointer-events: none; }
+  .board-stand .leg { position: absolute; top: 1em; bottom: 0.75em; width: 0.9em; background: linear-gradient(90deg, #9aa7b8, #dfe6ee 45%, #8a97a8); border-radius: 0.2em; }
+  .board-stand .leg.l { left: 14%; } .board-stand .leg.r { right: 14%; }
+  .board-stand .leg::after {   /* Fuß */
+    content: ""; position: absolute; left: -3.2em; right: -3.2em; bottom: -0.1em; height: 0.7em; border-radius: 0.35em;
+    background: linear-gradient(#cfd8e3, #8d9aab);
+  }
+  .board-stand .wheel {
+    position: absolute; bottom: -0.78em; width: 1.5em; height: 1.5em; border-radius: 50%; z-index: 1;
+    background: conic-gradient(#3b4250 0 25%, #596273 0 50%, #3b4250 0 75%, #596273 0); border: 0.16em solid #262d3b; box-sizing: border-box;
+    transform: rotate(var(--roll));
+  }
+  #board-unit.sliding .wheel { transition: transform var(--slide) cubic-bezier(0.5, 0, 0.18, 1); }
+  .board-stand .wheel:first-child { left: -3.1em; } .board-stand .wheel:last-child { right: -3.1em; }
+  /* Griff links am Rahmen: klicken oder ziehen */
+  #board-grip {
+    position: absolute; left: -2.35em; top: 34%; height: 32%; width: 1.5em; border-radius: 0.6em 0 0 0.6em;
+    background: linear-gradient(90deg, #3fb9d6, #2a9dbb); cursor: ew-resize; touch-action: none;
+    box-shadow: -0.15em 0.2em 0.5em rgba(40, 60, 95, 0.3);
+  }
+  #board-grip::after {
+    content: "⋮"; position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center;
+    color: #fff; font: 700 1.4em/1 sans-serif;
+  }
+  #board-grip:hover { filter: brightness(1.12); }
 
   /* Knopf zum Ein-/Ausblenden der rechten Leiste */
   #panel-toggle {
@@ -29,7 +178,10 @@
   #panel-toggle:hover { background: rgba(0, 0, 0, 0.75); }
   #anim-panel.collapsed { display: none !important; }
   /* Chat: Position/Breite/Maximalhöhe setzt stage.js so, dass er genau in
-     den freien Streifen unter dem Board passt (Werte hier = Fallback). */
+     den freien Streifen unter dem Board passt (Werte hier = Fallback).
+     Aussehen: dunkelblaues Glas mit hellem Rand - passt in den Raum und bleibt über jedem
+     Hintergrund lesbar (auch im durchsichtigen Popup über dem Desktop). Bewusst OHNE
+     backdrop-filter: Der würde das 3D-Bild darunter jedes Bild weichzeichnen (Bildrate). */
   #chat-container {
     position: fixed;
     bottom: 1.5vh;
@@ -39,45 +191,79 @@
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
-    background: rgba(0, 0, 0, 0.7);
-    color: white;
-    font-family: sans-serif;
-    padding: 1vh 1vw;
+    background: linear-gradient(rgba(18, 40, 92, 0.80), rgba(9, 22, 58, 0.88));
+    border: 1px solid rgba(150, 225, 255, 0.38);
+    box-shadow: 0 6px 22px rgba(4, 16, 52, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    color: #f3f9ff;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    padding: 8px 10px;
     overflow: hidden;      /* gescrollt wird nur der Nachrichtenbereich */
-    border-radius: 0.5vh;
+    border-radius: 16px;
     z-index: 1000;
   }
   #chat-messages {
     flex: 1 1 auto;
     min-height: 0;         /* darf schrumpfen -> Scrollen statt Überlaufen */
     overflow-y: auto;
-    margin-bottom: 1vh;
+    margin-bottom: 8px;
+    padding-right: 4px;
   }
   #chat-messages:empty { display: none; }
+  #chat-messages::-webkit-scrollbar { width: 6px; }
+  #chat-messages::-webkit-scrollbar-thumb { background: rgba(150, 225, 255, 0.4); border-radius: 3px; }
+  /* Sprechblasen */
+  .chat-msg {
+    width: fit-content; max-width: 88%; box-sizing: border-box; margin: 0 0 5px 0; padding: 5px 11px;
+    border-radius: 13px; line-height: 1.38; word-wrap: break-word; overflow-wrap: break-word;
+    background: rgba(255, 255, 255, 0.13); border: 1px solid rgba(255, 255, 255, 0.12);
+    border-bottom-left-radius: 4px;
+    text-shadow: 0 1px 1px rgba(0, 10, 40, 0.35);
+  }
+  .chat-msg strong { color: #8fe9ff; font-weight: 600; }
+  .chat-msg.me {
+    margin-left: auto; background: rgba(63, 185, 214, 0.34); border-color: rgba(143, 233, 255, 0.4);
+    border-radius: 13px; border-bottom-right-radius: 4px;
+  }
+  .chat-msg.me strong { display: none; }           /* rechts = von dir, der Name ist überflüssig */
+  .chat-msg.sys {
+    margin-left: auto; margin-right: auto; border-radius: 13px; font-size: 0.92em;
+    background: rgba(255, 190, 90, 0.20); border-color: rgba(255, 205, 130, 0.45);
+  }
+  .chat-msg.sys strong { color: #ffd58a; }
   /* Aufgeklappt (▲ in der Chatzeile, stage.js): bis zur Oberkante des Boards, ganzer Verlauf */
-  #chat-container.expanded { background: rgba(0, 0, 0, 0.82); }
+  #chat-container.expanded { background: linear-gradient(rgba(18, 40, 92, 0.90), rgba(9, 22, 58, 0.94)); }
   #chat-container.expanded #chat-messages:empty { display: block; }
   #chat-messages, #chat-input { font-size: clamp(12px, 1.9vh, 15px); }
-  #chat-row { display: flex; gap: 0.5vw; flex: 0 0 auto; }
+  #chat-row { display: flex; flex: 0 0 auto; align-items: stretch; }
+  #chat-row > * + * { margin-left: 6px; }          /* (flex-gap kennt die Qt-Engine noch nicht) */
   #chat-row button {
-    flex: 0 0 auto; padding: 0 1vw; border: none; border-radius: 0.3vh; cursor: pointer;
-    background: rgba(255, 255, 255, 0.85); font-size: clamp(12px, 1.9vh, 15px);
+    flex: 0 0 auto; min-width: 2.4em; padding: 0 0.8em; cursor: pointer; color: #f3f9ff;
+    border: 1px solid rgba(150, 225, 255, 0.42); border-radius: 999px;
+    background: rgba(120, 215, 255, 0.20); font-size: clamp(12px, 1.9vh, 15px);
+    transition: background 0.15s;
   }
-  #chat-row button:hover { background: white; }
-  #chat-think { opacity: 0.45; }                   /* aus: blass */
-  #chat-think.active { opacity: 1; background: #8fb4ff; }
-  #chat-think.active:hover { background: #a9c5ff; }
-  #chat-mic.recording { background: #ff3b5c; color: white; animation: mic-pulse 1s ease-in-out infinite; }
+  #chat-row button:hover { background: rgba(120, 215, 255, 0.40); }
+  #chat-think { opacity: 0.55; }                   /* aus: blass */
+  #chat-think.active { opacity: 1; background: #3fb9d6; border-color: #a8f0ff; }
+  #chat-think.active:hover { background: #55c9e4; }
+  #chat-mic.recording { background: #ff3b5c; border-color: #ffb3c0; color: white; animation: mic-pulse 1s ease-in-out infinite; }
   @keyframes mic-pulse { 50% { opacity: 0.6; } }
   #chat-input {
     flex: 1 1 auto;
     min-width: 0;
     width: 100%;
-    padding: 1vh 1vw;
+    padding: 0.8vh 1.1em;
     box-sizing: border-box;
-    border-radius: 0.3vh;
-    border: none;
+    border-radius: 999px;
+    border: 1px solid rgba(150, 225, 255, 0.5);
+    background: rgba(255, 255, 255, 0.93);
+    color: #10254d;
+    font-family: inherit;
+    outline: none;
+    transition: box-shadow 0.15s, background 0.15s;
   }
+  #chat-input::placeholder { color: #6f86a8; }
+  #chat-input:focus { background: #ffffff; box-shadow: 0 0 0 3px rgba(95, 215, 245, 0.45); }
   #anim-panel {
     position: fixed;
     top: 7vh;              /* Platz für den Ein-/Aus-Knopf; max-height setzt stage.js */

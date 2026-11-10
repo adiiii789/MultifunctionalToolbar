@@ -35,6 +35,7 @@ def _ollama_assistant() -> Assistant:
     from backend.assistant.skills import SKILLS
     from backend.assistant.tools import CompositeToolProvider
     from backend.integrations.mcp_client import load_mcp_servers
+    from backend.integrations.board import BoardTools
     from backend.integrations.toolbar import ToolbarPluginTools
     from backend.preferences import JsonPreferenceStore
 
@@ -58,8 +59,9 @@ def _ollama_assistant() -> Assistant:
                                              config.OLLAMA_TIMEOUT_S, config.CLAUDE_CODE_DIR))
     model = ModelRouter(providers, config.OLLAMA_MODEL, config.OLLAMA_THINK)
     mcp_servers = load_mcp_servers(config.MCP_SERVERS_FILE, config.ROOT_DIR)
-    # Werkzeuge: MCP-Server, Plugins der Toolbar (Timer, Kalender ...), Fähigkeiten
-    tools = CompositeToolProvider([*mcp_servers, ToolbarPluginTools(), *(skill.tools for skill in SKILLS)])
+    # Werkzeuge: MCP-Server, Plugins der Toolbar (Timer, Kalender ...), Board (show_on_board), Fähigkeiten
+    tools = CompositeToolProvider([*mcp_servers, ToolbarPluginTools(), BoardTools(),
+                                   *(skill.tools for skill in SKILLS)])
     instructions = "\n\n".join(skill.instructions for skill in SKILLS)
     return OllamaAssistant(model, tools, JsonPreferenceStore(config.PREFERENCES_FILE), instructions,
                            config.ASSISTANT_MAX_TOOL_ROUNDS, config.ASSISTANT_MAX_HISTORY,

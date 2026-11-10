@@ -5,8 +5,8 @@ Der Viewer liegt in `scripts/_a3d/viewer/` (Übersicht aller Teile: `../README.m
 ```
 _a3d/viewer/
 ├── viewer.html        Grundgerüst: Panel, Chat, lädt CSS und Skripte
-├── css/viewer.css     Aussehen von Panel, Chat, Bühne
-├── assets/            Hintergrundbild (stage_background.png – austauschbar)
+├── css/viewer.css     Aussehen von Panel, Chat, Raum und Board
+├── assets/            alte Hintergrundbilder (nur noch für `STAGE.background`, siehe unten)
 ├── board/             Inhalte fürs Smartboard (start.html = Startseite)
 ├── vendor/            three.js r147 (lokal, damit es ohne Internet läuft)
 ├── models/model.glb   das Modell
@@ -16,10 +16,10 @@ _a3d/viewer/
     ├── pose.js        Rig-Knochen, Helfer (dir, aim, rotate, turnHead), Ablauf pro Frame (updatePose)
     ├── motion.js      EASE, keys(): Easing-Kurven, Keyframes, Feder-Glättung (smoothDamp)
     ├── hands.js       HAND_POSES: Fingerposen (locker, Faust, Zeigen ...), orientPalm()
-    ├── idle.js        natürliches Idle: IDLE (Armhaltung, Atmen, Wiegen, Umschauen)
+    ├── idle.js        natürliches Idle: IDLE (Armhaltung, Atmen, Wiegen, Standbein wechseln, Umschauen)
     ├── gestures.js    GESTURE_GROUPS: Gesten + Moderation, Gesten beim Sprechen
     ├── pet.js         PET: Streicheln am Kopf (Augen ><, Kopf neigt sich)
-    ├── walk.js        WALK: Laufen auf der Stelle
+    ├── walk.js        WALK: Gehen und Stehen – Schritte, Becken, Fuß-IK, Armschwung
     ├── stations.js    STATIONS_DEFAULT: Punkte, zu denen die Figur läuft (walkTo)
     ├── clips.js       CLIPS: Blender-Animationen aus der GLB, Kategorien, Überblenden
     ├── physics.js     SPRING_CHAINS + COLLIDERS: Haare, Krawatte, Rock, Ärmel
@@ -29,7 +29,9 @@ _a3d/viewer/
     ├── actions.js     [kategorie.funktion] im Chat ausführen
     ├── assistant.js   KI-Antworten (Ollama/MCP über scripts/_a3d/ai), Spracheingabe 🎤
     ├── panel.js       Bedienpanel (Darstellung, Idle/Laufen, Clips nach Kategorie, Mimik, Mausblick)
-    ├── stage.js       STAGE: Hintergrund, Board-Fläche, Figur-Position, Mausblick, Debug-Kamera
+    ├── stage.js       STAGE: Lage von Raum und Board, Figur-Position, Mausblick, Debug-Kamera
+    ├── room.js        ROOM: der Raum (Fenster, Uhr, Licht, Pflanze, Tafel) und das rollbare Board
+    ├── room3d.js      ROOM3D: 3D-Raum aus models/room.glb (falls vorhanden), Himmel, Wasser
     └── main.js        Setup, Modell laden, Kamera, Render-Schleife – startet alles
 ```
 
@@ -41,11 +43,16 @@ _a3d/viewer/
 | Helligkeit des Lichts            | toon-shader.js   | `LIGHTING`                   |
 | Armhaltung, Atmen, Umschauen     | idle.js          | `IDLE`                       |
 | Neue Geste hinzufügen            | gestures.js      | `GESTURE_GROUPS`             |
-| Lauftempo, Schwung               | walk.js          | `WALK`                       |
+| Standbein wechseln (wie oft, wie stark) | idle.js   | `IDLE.shift…`, `IDLE.freeFoot…` |
+| Wie lange sie der stillen Maus nachschaut | idle.js | `IDLE.mouseIdle`             |
+| Lauftempo, Schritthöhe, Abrollen | walk.js          | `WALK`                       |
+| Wie „lebendig“ gehaltene Gesten sind | gestures.js  | `GESTURE.live`, `GESTURE.shoulder` |
+| Raum: Wind, Tageszeiten, Licht auf der Figur | room.js | `ROOM`                    |
+| Farben des Raums je Tageszeit    | css/viewer.css   | `#room { --wall-top … }`     |
 | Haar-/Rock-Steifigkeit           | physics.js       | `SPRING_CHAINS`              |
 | Kollision mit dem Körper         | physics.js       | `COLLIDERS`                  |
 | Sprechtempo, Mundöffnung         | face.js          | `LIPSYNC`                    |
-| Hintergrundbild, Board-Fläche    | stage.js         | `STAGE.background`, `STAGE.board` |
+| Board-Fläche, eigenes Hintergrundbild | stage.js    | `STAGE.board`, `STAGE.background` |
 | Position/Größe der Figur         | stage.js         | `STAGE.character`            |
 | Wo die Figur geradeaus schaut    | stage.js         | `STAGE.lookCenter` ("screen", "window", {x,y}) |
 | Überblendzeit, Loop-Standard     | clips.js         | `CLIPS`                      |
@@ -68,6 +75,98 @@ _a3d/viewer/
 
 Während ein Clip läuft, sind das Idle, die lockere Fingerpose und das
 Rock-Ausweichen der Hände aus. Der Mausblick wird weiterhin oben drauf gerechnet.
+
+## Bewegung: Idle, Gehen, Gesten
+
+Alles außer den Blender-Clips ist gerechnet, nicht aufgezeichnet. Damit es nicht starr wirkt:
+
+- **Füße stehen fest (Fuß-IK, walk.js).** Die Beine werden jedes Bild so gestellt, dass die Füße
+  an ihrem Platz bleiben – egal, was Becken und Oberkörper tun. Dadurch kann die Figur ihr
+  **Gewicht verlagern** (Becken wandert über ein Bein, Hüfte und Schultern kippen gegeneinander,
+  das andere Bein steht locker), sich verbeugen (Hüfte geht nach hinten) oder in die Knie federn.
+- **Laufanimation:** Standard ist wieder die alte (gleichmäßiger Gangzyklus, `WALK.classic = true`,
+  Werte in `WALK.old`). Panel → Animationen → „🚶 Alte Laufanimation: aus“ schaltet auf die neue um:
+- **Gehen mit echten Schritten (neue Art).** Ein Fuß bleibt stehen, bis der andere aufsetzt; Ferse setzt auf,
+  Fußspitze rollt ab. Die Figur läuft weich an, bremst vor dem Ziel ab und dreht sich mit kleinen
+  Schritten statt wie auf einem Drehteller. Armschwung, Gegendrehung der Schultern und das Wippen
+  des Beckens ergeben sich aus der Stellung der Füße.
+- **Idle:** Atmen (einatmen schneller als ausatmen), Arme pendeln einzeln und hängen dem Oberkörper
+  nach, Finger bewegen sich leicht, die Augen springen in kleinen Schritten, bei großen
+  Blickwechseln blinzelt sie. Steht die Maus `IDLE.mouseIdle` Sekunden still, schaut sie sich
+  wieder selbst um statt auf den Zeiger zu starren.
+- **Gesten:** Der ganze Körper macht mit (`g.shift()` legt das Gewicht aufs passende Bein), die
+  Schulter hebt sich mit dem Arm, der Blick geht dem Arm voraus, und eine gehaltene Pose steht
+  nie ganz still.
+
+- **Trägheit (pose.js, `FOLLOW`):** Oberkörper, Kopf und Arme nehmen ihre Zielhaltung nicht sofort
+  ein, sondern folgen ihr wie etwas mit Masse – laufen nach, schwingen minimal über und pendeln
+  aus, die Hand später als der Oberarm. `FOLLOW.amount = 0` schaltet das ab (zum Vergleichen),
+  `speed`/`damping` je Knochen machen es schwerer oder straffer.
+- **Kleine Eigenheiten (idle.js, `FIDGETS`):** alle paar Sekunden tief durchatmen, auf die Zehen
+  wippen, die Arme schwingen oder die Schultern lockern (`IDLE.fidgetMin/Max`, `fidgetAmount`).
+
+Während ein Clip läuft oder nach „⏹ Stopp (Ruhepose)“ ist die Fuß-IK aus.
+
+**Technik:** Das Plugin zeigt den Viewer mit Qt WebEngine 5.15 (Chromium 83). Neuere CSS-/JS-Kurzformen
+(z. B. `inset`, `replaceChildren`, `replaceAll`) gibt es dort nicht – nach Änderungen im Plugin testen,
+nicht nur in einem aktuellen Browser.
+
+**Bildrate:** Der Raum liegt unter dem 3D-Canvas. Was sich dort dauernd bewegt (Wolken, Vorhänge), muss
+eine eigene kleine Ebene sein und darf nur per `transform`/`opacity` animiert werden; keine
+Daueranimation, kein `mix-blend-mode`, kein `filter` in den großen Zeichnungen – sonst halbiert sich
+die Bildrate (siehe Kommentar in room.js).
+
+## Der Raum
+
+Der Hintergrund ist ein gezeichnetes Klassenzimmer (room.js, SVG) hinter der Figur. Klicks gehen
+durch die Figur hindurch auf den Raum:
+
+| Was | Klick |
+|---|---|
+| 🪟 Fenster | auf/zu – offen weht Wind: Vorhänge bauschen sich, Haare und Rock bewegen sich |
+| 🕐 Uhr | zeigt die echte Zeit; Miku sagt, wie spät es ist |
+| 💡 Lichtschalter | Deckenlampen an/aus (abends und nachts von selbst an) |
+| 🪴 Pflanze | raschelt; nach dreimal Gießen blüht sie |
+| 🟩 Tafel (hinter dem Board) | mit der Maus malen, der Schwamm wischt |
+| 📺 Board | am türkisen Griff links: klicken oder ziehen, dann rollt es zur Seite bzw. zurück |
+
+Der Himmel im Fenster folgt der Uhrzeit (Tag / Abend / Nacht, `ROOM.hours`); das Licht auf der
+Figur passt sich an (`ROOM.light`). Miku schaut hin, wenn etwas angeklickt wird.
+
+Panel → „🏫 Raum“: **Miku schiebt das Board weg / holt es zurück** (sie läuft hin, schiebt bzw.
+zieht und geht zurück), Board von selbst rollen, Fenster, Licht, Tageszeit, Tafel wischen und ob
+sie mit Worten reagiert (`ROOM.talk`). Neuer Inhalt fürs Board holt ein weggerolltes Board zurück
+(`ROOM.boardReturnsOnContent`). Der Zustand steht in `room_state.json`.
+
+Im schmalen Fenster sieht man den Ausschnitt des Raums um die Figur (ohne Board), das schmale
+Popup bleibt durchsichtig.
+
+Von außen: `setBoardAside(true/false)`, `pushBoard(true/false)`, `setWindowOpen(…)`, `setLamp(…)`,
+`setDaytime("auto"|"day"|"evening"|"night")`, `wipeChalkboard()`, `getRoomState()`,
+`lookAtPoint(x, y, sekunden)`.
+
+## 3D-Raum statt des gezeichneten Raums
+
+Liegt ein Raum-Modell in `models/`, ersetzt es den gezeichneten Raum (room3d.js): Die Figur steht
+dann wirklich im Modell, dahinter Himmel, als Boden eine Wasserfläche. Ohne Datei bleibt der
+gezeichnete Raum.
+
+1. Modell als **glTF** oder **GLB** besorgen und ablegen – entweder `models/room.glb` oder den
+   entpackten Sketchfab-Ordner als `models/room/` (`scene.gltf`, `scene.bin`, `textures/`) bzw.
+   `models/room/Arona room.glb`. Weitere Namen: `ROOM3D.files`.
+2. Toolbar neu starten. Panel → „🧊 3D-Raum“ zeigt, ob es geladen wurde.
+3. Dort mit den Reglern **Größe, Lage, Drehung und Wasserhöhe** einstellen, bis die Figur am
+   gewünschten Platz steht (wird in `room_state.json` gespeichert). Die Figur steht immer bei
+   x = 0, z = 0; verschoben wird der Raum um sie herum.
+
+Himmel, Wasser (Lichtnetz) und die Färbung des Raums folgen der Tageszeit (`ROOM3D.looks`; nachts
+Sternenhimmel und alles in Blau). „Drehung“ dreht den Raum um den Platz der Figur. Das Board lässt
+sich weiter verschieben. Das Lichtnetz auf dem Wasser (Stärke, Maschengröße, Tempo) hat eigene Regler
+im selben Panel-Abschnitt; von außen `setRoom3dGlint({ power, size, speed })`. Uhr, Pflanze, Fenster und Tafel des gezeichneten Raums gibt es im 3D-Raum
+nicht. Abschalten: `ROOM3D.enabled = false` in room3d.js.
+
+Gedacht für „Arona room“ von C4_62195 (Sketchfab, CC BY 4.0 – Urheber nennen, wenn du es
+weitergibst). Die Modelldatei liegt nicht im Repository.
 
 ## Augen-Ebenen (Tiefen-Vorlauf)
 
@@ -168,6 +267,8 @@ Schreibweise: `[kategorie.funktion]`, mit Wert `[kategorie.funktion(wert)]`.
 | `stimmung` | `[stimmung.lächeln]`, `[stimmung.neutral]` | Grundstimmung, bleibt |
 | `clip` | `[clip.Tanz_Drehen]` | Blender-Animation |
 | `board` | `[board.zeige(board/folie2.html)]`, `[board.zeige(<h1>Hi</h1>)]`, `[board.leeren]` | Board-Inhalt |
+| `board` | `[board.weg]`, `[board.her]` | Miku schiebt das Board zur Seite / holt es zurück |
+| `raum` | `[raum.fenster auf]`, `[raum.licht aus]`, `[raum.nacht]`, `[raum.auto]`, `[raum.tafel wischen]` | Fenster, Licht, Tageszeit, Tafel |
 | `pause` | `[pause.1.5]` | warten (Sekunden) |
 | `bewegung` | `[bewegung.idle]`, `[bewegung.laufen]`, `[bewegung.stopp]` | Grundbewegung |
 
@@ -226,14 +327,18 @@ Figur geradeaus schauen soll (auch außerhalb des Fensters). Klick im Fenster
   `_a3d/viewer/`, geschrieben über den Server des Plugins (`do_POST`). localStorage
   allein reicht nicht, weil der Server bei jedem Start einen neuen Port bekommt.
 
-## Eigenes Hintergrundbild
+## Eigenes Hintergrundbild statt des Raums
 
-1. PNG nach `assets/` legen und `STAGE.background` anpassen.
+1. PNG nach `assets/` legen und `STAGE.background` in stage.js darauf setzen (z. B. das alte
+   `"assets/stage_background.png"`). `null` = der gezeichnete Raum.
 2. Die weiße Board-Fläche im Bild in Pixeln ausmessen (z. B. in Paint) und als
    Anteil der Bildgröße eintragen: `left = x / Bildbreite`, `top = y / Bildhöhe`,
    `width = Breite / Bildbreite`, `height = Höhe / Bildhöhe`.
 3. Zum Prüfen im Panel „🎥 Kamera frei (Debug)“ einschalten – die Board-Fläche
    wird dann gestrichelt umrandet.
+
+Mit eigenem Bild gibt es nichts zum Anklicken und das Board lässt sich nicht verschieben (es ist
+Teil des Bilds). `STAGE.narrow.background` setzt ein eigenes Bild nur fürs schmale Layout.
 
 ## Wichtig
 
